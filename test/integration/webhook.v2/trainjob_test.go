@@ -31,6 +31,7 @@ var _ = ginkgo.Describe("TrainJob Webhook", ginkgo.Ordered, func() {
 	var ns *corev1.Namespace
 	apiGroup := "kubeflow.org"
 	runtimeKind := "TrainingRuntime"
+	clusterTrainingRuntimeKind := "ClusterTrainingRuntime"
 
 	ginkgo.BeforeAll(func() {
 		fwk = &framework.Framework{}
@@ -54,7 +55,7 @@ var _ = ginkgo.Describe("TrainJob Webhook", ginkgo.Ordered, func() {
 		gomega.Expect(k8sClient.Create(ctx, ns)).To(gomega.Succeed())
 	})
 
-	ginkgo.It("Should succeed in creating trainJob with trainingRuntime present", func() {
+	ginkgo.It("Should succeed in creating trainJob with namespace scoped trainingRuntime", func() {
 
 		runtimeName := "valid"
 		trainingRuntime := kubeflowv2.TrainingRuntime{
@@ -91,8 +92,7 @@ var _ = ginkgo.Describe("TrainJob Webhook", ginkgo.Ordered, func() {
 		gomega.Expect(k8sClient.Create(ctx, trainJob)).To(gomega.Succeed())
 	})
 
-	ginkgo.It("Should fail in creating trainJob with trainingRuntime not present", func() {
-
+	ginkgo.It("Should fail in creating trainJob referencing trainingRuntime in a different namespace", func() {
 		runtimeName := "inValid"
 
 		trainingRuntimeRef := kubeflowv2.TrainingRuntimeRef{
@@ -109,12 +109,48 @@ var _ = ginkgo.Describe("TrainJob Webhook", ginkgo.Ordered, func() {
 				Kind:       "TrainJob",
 			},
 			ObjectMeta: metav1.ObjectMeta{
-				Name:      "valid-trainjob",
-				Namespace: ns.Name,
+				GenerateName: "invalid-trainjob-",
+				Namespace:    ns.Name,
 			},
 			Spec: jobSpec,
 		}
 		gomega.Expect(k8sClient.Create(ctx, trainJob)).To(gomega.HaveOccurred())
+	})
+
+	ginkgo.It("Should success in creating trainJob with ClusterTrainingRuntime", func() {
+
+		runtimeName := "valid-cluster-training-runtime"
+		trainingRuntime := kubeflowv2.ClusterTrainingRuntime{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: kubeflowv2.SchemeGroupVersion.String(),
+				Kind:       clusterTrainingRuntimeKind,
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name: runtimeName,
+			},
+		}
+		gomega.Expect(k8sClient.Create(ctx, &trainingRuntime)).To(gomega.Succeed())
+
+		trainingRuntimeRef := kubeflowv2.TrainingRuntimeRef{
+			Name:     runtimeName,
+			APIGroup: &apiGroup,
+			Kind:     &clusterTrainingRuntimeKind,
+		}
+		jobSpec := kubeflowv2.TrainJobSpec{
+			TrainingRuntimeRef: trainingRuntimeRef,
+		}
+		trainJob := &kubeflowv2.TrainJob{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: kubeflowv2.SchemeGroupVersion.String(),
+				Kind:       "TrainJob",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				GenerateName: "valid-trainjob-",
+				Namespace:    ns.Name,
+			},
+			Spec: jobSpec,
+		}
+		gomega.Expect(k8sClient.Create(ctx, trainJob)).To(gomega.Succeed())
 	})
 
 	ginkgo.It("Should fail in creating trainJob with pre-trained model config when referencing "+

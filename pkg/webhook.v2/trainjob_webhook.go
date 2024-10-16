@@ -20,11 +20,11 @@ import (
 	"context"
 	"fmt"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/klog/v2"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"slices"
 	"strconv"
 
@@ -34,6 +34,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	kubeflowv2 "github.com/kubeflow/training-operator/pkg/apis/kubeflow.org/v2alpha1"
+	"k8s.io/client-go/dynamic"
 )
 
 var (
@@ -43,12 +44,13 @@ var (
 )
 
 type TrainJobWebhook struct {
-	Client client.Client
+	Client *dynamic.DynamicClient
 }
 
 func setupWebhookForTrainJob(mgr ctrl.Manager) error {
+	client, _ := dynamic.NewForConfig(mgr.GetConfig())
 	webhook := &TrainJobWebhook{
-		Client: mgr.GetClient(),
+		Client: client,
 	}
 	return ctrl.NewWebhookManagedBy(mgr).
 		For(&kubeflowv2.TrainJob{}).
@@ -79,26 +81,34 @@ func (w *TrainJobWebhook) ValidateDelete(context.Context, runtime.Object) (admis
 	return nil, nil
 }
 
-func validateTrainJob(ctx context.Context, client client.Client, oldJob, newJob *kubeflowv2.TrainJob) field.ErrorList {
+func validateTrainJob(ctx context.Context, client *dynamic.DynamicClient, oldJob, newJob *kubeflowv2.TrainJob) field.ErrorList {
 	var allErrs field.ErrorList
-	var trainingRuntime kubeflowv2.TrainingRuntime
-	trainingRuntime.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   *newJob.Spec.TrainingRuntimeRef.APIGroup,
-		Version: "v1alpha1",
-		Kind:    *newJob.Spec.TrainingRuntimeRef.Kind,
-	})
-	var key types.NamespacedName
+	var err error
+	var obj *unstructured.Unstructured
 	if *newJob.Spec.TrainingRuntimeRef.Kind == "ClusterTrainingRuntime" {
-		key = types.NamespacedName{
-			Name: newJob.Spec.TrainingRuntimeRef.Name,
+		gvr := schema.GroupVersionResource{
+			Group:    *newJob.Spec.TrainingRuntimeRef.APIGroup,
+			Version:  "v1alpha1",
+			Resource: "clustertrainingruntimes",
 		}
+		obj, err = client.Resource(gvr).Get(ctx, newJob.Spec.TrainingRuntimeRef.Name, metav1.GetOptions{
+			TypeMeta: metav1.TypeMeta{
+				Kind: *newJob.Spec.TrainingRuntimeRef.Kind,
+			},
+		})
 	} else {
-		key = types.NamespacedName{
-			Name:      newJob.Spec.TrainingRuntimeRef.Name,
-			Namespace: newJob.Namespace,
+		gvr := schema.GroupVersionResource{
+			Group:    *newJob.Spec.TrainingRuntimeRef.APIGroup,
+			Version:  "v1alpha1",
+			Resource: "trainingruntimes",
 		}
+		obj, err = client.Resource(gvr).Namespace(newJob.Namespace).Get(ctx, newJob.Spec.TrainingRuntimeRef.Name, metav1.GetOptions{
+			TypeMeta: metav1.TypeMeta{
+				Kind: *newJob.Spec.TrainingRuntimeRef.Kind,
+			},
+		})
 	}
-	if err := client.Get(ctx, key, &trainingRuntime); err != nil {
+	if err != nil {
 		if errors.IsNotFound(err) {
 			allErrs = append(allErrs, field.NotFound(trainingRuntimeNamePath, newJob.Spec.TrainingRuntimeRef.Name))
 		} else {
@@ -107,12 +117,15 @@ func validateTrainJob(ctx context.Context, client client.Client, oldJob, newJob 
 		return allErrs
 	}
 
-	allErrs = append(allErrs, validateTrainJobSpec(&newJob.Spec, &trainingRuntime)...)
+	allErrs = append(allErrs, validateTrainJobSpec(&newJob.Spec, obj)...)
 	return allErrs
 }
 
-func validateTrainJobSpec(spec *kubeflowv2.TrainJobSpec, trainingRuntime *kubeflowv2.TrainingRuntime) field.ErrorList {
+func validateTrainJobSpec(spec *kubeflowv2.TrainJobSpec, runtime *unstructured.Unstructured) field.ErrorList {
 	var allErrs field.ErrorList
+	if runtime.GetKind() == "TrainingRuntime" {
+		trainingRuntime = runtime.(*kubeflowv2.TrainingRuntime)
+	}
 	if spec.Trainer != nil {
 		numProcPerNodePath := specPath.Child("trainer").Child("numProcPerNode")
 		if trainingRuntime.Spec.MLPolicy.MPI != nil {
