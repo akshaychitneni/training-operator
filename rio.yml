@@ -1,0 +1,25 @@
+schemaVersion: 2.0
+timeout: 25
+
+pipelines:
+  - name: docker
+    branchName: cache
+    build:
+      template: freestyle:v4:publish
+      steps:
+        - 'true'
+    machine:
+      #      targetPlatforms:
+      #        - linux/arm64
+      #        - linux/amd64
+      baseImage: docker.apple.com/base-images/ubi9/ubi-builder
+      env:
+        GIT_HASH: $(git rev-parse --short @)
+    package:
+      version: '${GIT_HASH}'
+      dockerfile:
+        - dockerfilePath: ./cmd/initializers/dataset/Dockerfile
+          name: cache_initializer
+          perApplication: false
+          publish:
+            - repo: docker.apple.com/achitneni/cache_initializer

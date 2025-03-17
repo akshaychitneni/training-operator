@@ -1,0 +1,87 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: cache-initializer-sa
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: cache-initializer-role
+rules:
+  - apiGroups: ["*"]
+    resources:
+      - leaderworksets
+      - services
+      - serviceaccounts
+    verbs: ["create", "get", "list", "watch"]
+  - apiGroups: [ "*" ]
+    resources:
+      - trainjobs
+    verbs: [ "get", "list", "watch" ]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: cache-initializer-role-binding
+roleRef:
+  name: cache-initializer-role
+  kind: ClusterRole
+subjects:
+  - kind: ServiceAccount
+    name: cache-initializer-sa
+    namespace: cache-test
+---
+apiVersion: trainer.kubeflow.org/v1alpha1
+kind: ClusterTrainingRuntime
+metadata:
+  labels:
+    trainer.kubeflow.org/accelerator: gpu-tesla-v100-16gb
+    trainer.kubeflow.org/phase: pre-training
+  name: torch-distributed-with-cache
+spec:
+  mlPolicy:
+    numNodes: 1
+    torch:
+      numProcPerNode: auto
+  template:
+    spec:
+      replicatedJobs:
+        - name: dataset-initializer
+          replicas: 1
+          template:
+            spec:
+              template:
+                spec:
+                  serviceAccountName: cache-initializer-sa
+                  containers:
+                  - name: dataset-initializer
+                    image: docker.apple.com/achitneni/cache_initializer:0a53c4d0
+                    env:
+                      - name: IMAGE
+                        value: "docker.apple.com/achitneni/arrow_cache:b59025d"
+        - name: trainer-node
+          replicas: 1
+          dependsOn:
+            - name: dataset-initializer
+              status: Complete
+          template:
+            spec:
+              template:
+                spec:
+                  containers:
+                    - command:
+                        - /bin/bash
+                        - -c
+                        - |
+                          echo "Torch Distributed Runtime"
+                          
+                          echo "--------------------------------------"
+                          echo "Torch Default Runtime Env"
+                          env | grep PET_
+                          
+                          pip list
+                      image: pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime
+                      name: trainer
+                      resources:
+                        limits:
+                          nvidia.com/gpu: 4
