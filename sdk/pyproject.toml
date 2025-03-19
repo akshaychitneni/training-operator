@@ -3,14 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "kubeflow"
-dynamic = ["version"]
+name = "apple-kubeflow-cache-int"
+version = "0.0.5"
 authors = [
   { name = "The Kubeflow Authors", email = "kubeflow-discuss@googlegroups.com" },
 ]
-license = { file = "../LICENSE" }
+#license = { file = "../LICENSE" }
 description = "Kubeflow Python SDK to manage ML workloads and to interact with Kubeflow APIs."
-readme = "../README.md"
+#readme = "../README.md"
 keywords = ["kubeflow", "trainer", "model training", "llm", "ai"]
 classifiers = [
   "Intended Audience :: Developers",

@@ -74,12 +74,26 @@ class CustomTrainer:
     resources_per_node: Optional[Dict] = None
 
 
+@dataclass
+class DatasetInitializer:
+    storage_uri: Optional[str]
+
 # Configuration for the HuggingFace dataset initializer.
 # TODO (andreyvelich): Discuss how to keep these configurations is sync with pkg.initializers.types
 @dataclass
-class HuggingFaceDatasetInitializer:
-    storage_uri: str
+class HuggingFaceDatasetInitializer(DatasetInitializer):
     access_token: Optional[str] = None
+
+
+@dataclass
+class ArrowCacheDatasetInitializer(DatasetInitializer):
+    cluster_size: str
+    metadata_loc: str
+    schema_name: Optional[str] = None
+    table_name: Optional[str] = None
+    features: Optional[List[str]] = None
+    filter: Optional[str] = None
+
 
 
 # Configuration for the HuggingFace model initializer.
@@ -100,5 +114,5 @@ class Initializer:
             supported model initializers.
     """
 
-    dataset: Optional[HuggingFaceDatasetInitializer] = None
+    dataset: Optional[DatasetInitializer] = None
     model: Optional[HuggingFaceModelInitializer] = None

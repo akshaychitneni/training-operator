@@ -21,6 +21,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import kubeflow.trainer.models as models
 from kubeflow.trainer.constants import constants
+from kubeflow.trainer.models import IoK8sApiCoreV1EnvVar
 from kubeflow.trainer.types import types
 from kubernetes import config
 
@@ -190,24 +191,40 @@ def get_script_for_python_packages(
 
 
 def get_dataset_initializer(
-    dataset: Optional[types.HuggingFaceDatasetInitializer] = None,
+    dataset: Optional[types.DatasetInitializer] = None,
 ) -> Optional[models.TrainerV1alpha1DatasetInitializer]:
     """
     Get the TrainJob dataset initializer from the given config.
     """
-    if not isinstance(dataset, types.HuggingFaceDatasetInitializer):
-        return None
-
-    # TODO (andreyvelich): Support more parameters.
-    dataset_initializer = models.TrainerV1alpha1DatasetInitializer(
-        storageUri=(
-            dataset.storage_uri
-            if dataset.storage_uri.startswith("hf://")
-            else "hf://" + dataset.storage_uri
+    print("creating initializer")
+    if isinstance(dataset, types.HuggingFaceDatasetInitializer):
+        # TODO (andreyvelich): Support more parameters.
+        return models.TrainerV1alpha1DatasetInitializer(
+            storageUri=(
+                dataset.storage_uri
+                if dataset.storage_uri.startswith("hf://")
+                else "hf://" + dataset.storage_uri
+            )
         )
-    )
-
-    return dataset_initializer
+    elif isinstance(dataset, types.ArrowCacheDatasetInitializer):
+        envs = []
+        envs.append(IoK8sApiCoreV1EnvVar.from_dict({"name": "METADATA_LOC", "value": dataset.metadata_loc}))
+        envs.append(IoK8sApiCoreV1EnvVar.from_dict({"name": "CLUSTER_SIZE", "value": dataset.cluster_size}))
+        if dataset.table_name:
+            envs.append(IoK8sApiCoreV1EnvVar.from_dict({"name": "TABLE_NAME", "value": dataset.table_name}))
+        if dataset.schema_name:
+            envs.append(IoK8sApiCoreV1EnvVar.from_dict({"name": "SCHEMA_NAME", "value": dataset.schema_name}))
+        if dataset.features:
+            envs.append(IoK8sApiCoreV1EnvVar.from_dict({"name": "FEATURES", "value": ",".join(dataset.features)}))
+        if dataset.filter:
+            envs.append(IoK8sApiCoreV1EnvVar.from_dict({"name": "FILTER", "value": ",".join(dataset.filter)}))
+        print("creating dataset init with envs")
+        models.TrainerV1alpha1DatasetInitializer(
+            storageUri="arrowcache://",
+            env=envs
+        )
+    else:
+        return None
 
 
 def get_model_initializer(
