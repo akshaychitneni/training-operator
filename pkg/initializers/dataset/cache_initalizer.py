@@ -4,17 +4,19 @@ from typing import Optional
 import yaml
 import time
 from kubernetes import client, config, utils
+from kubernetes.client import V1OwnerReference
 from kubernetes.client.rest import ApiException
 from kubernetes.utils import FailToCreateError
 
 
-def deploy_lws_with_substitution(yaml_path, config_file: Optional[str] = None, namespace='default', substitutions=None,
+def deploy_lws_with_substitution(train_job_name, yaml_path, config_file: Optional[str] = None, namespace='default', substitutions=None,
                                  timeout=300):
     """
     Deploys a parameterized LeaderWorkerSet YAML with ServiceAccount, environment substitution,
     and waits for deployment readiness.
 
     Args:
+        train_job_name(str): train_job_name
         yaml_path (str): Path to YAML file containing configuration
         namespace (str): Target Kubernetes namespace
         substitutions (dict): Additional variables for substitution
@@ -42,6 +44,22 @@ def deploy_lws_with_substitution(yaml_path, config_file: Optional[str] = None, n
     api_client = client.ApiClient()
     core_v1 = client.CoreV1Api(api_client)
     custom_api = client.CustomObjectsApi(api_client)
+    training_job = custom_api.get_namespaced_custom_object(
+        group="trainer.kubeflow.org",
+        version="v1alpha1",
+        plural="trainjobs",
+        namespace=namespace,
+        name=train_job_name
+    )
+
+    # Create owner reference from TrainingJob
+    owner_ref = V1OwnerReference(
+        api_version="trainer.kubeflow.org/v1alpha1",
+        kind="TrainJob",
+        name=training_job["metadata"]["name"],
+        uid=training_job["metadata"]["uid"],
+        block_owner_deletion=False
+    )
 
     created_lws = []
     created_sa = []
@@ -67,7 +85,7 @@ def deploy_lws_with_substitution(yaml_path, config_file: Optional[str] = None, n
             #     except Exception as e:
             #         print(f"Error checking ServiceAccount: {e}")
             #         raise
-
+            resource['metadata']['owner_references'] = [owner_ref]
             if resource['kind'] == 'LeaderWorkerSet':
                 created_lws.append(resource)
             else:

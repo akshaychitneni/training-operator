@@ -23,3 +23,25 @@ pipelines:
           perApplication: false
           publish:
             - repo: docker.apple.com/achitneni/cache_initializer
+  - name: docker-controller
+    branchName: cache
+    build:
+      template: freestyle:v4:publish
+      steps:
+        - 'true'
+    machine:
+      #      targetPlatforms:
+      #        - linux/arm64
+      #        - linux/amd64
+      baseImage: docker.apple.com/base-images/ubi9/ubi-builder
+      env:
+        GIT_HASH: $(git rev-parse --short @)
+        DOCKER_BUILDKIT: 1
+    package:
+      version: '${GIT_HASH}'
+      dockerfile:
+        - dockerfilePath: ./cmd/trainer-controller-manager/Dockerfile
+          name: kubeflow_controller
+          perApplication: false
+          publish:
+            - repo: docker.apple.com/achitneni/kubeflow_controller

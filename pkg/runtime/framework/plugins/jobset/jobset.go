@@ -89,12 +89,14 @@ func (j *JobSet) Validate(runtimeJobTemplate client.Object, runtimeInfo *runtime
 	// TODO (andreyvelich): Refactor this test to verify the ancestor label in PodTemplate.
 	rJobContainerNames := make(map[string]sets.Set[string])
 	for _, rJob := range jobSet.Spec.ReplicatedJobs {
+		fmt.Println(rJob)
 		rJobContainerNames[rJob.Name] = sets.New[string]()
 		for _, c := range rJob.Template.Spec.Template.Spec.Containers {
 			rJobContainerNames[rJob.Name].Insert(c.Name)
 		}
 	}
 
+	fmt.Println(rJobContainerNames)
 	if newObj.Spec.Initializer != nil && newObj.Spec.Initializer.Dataset != nil {
 		if containerSet, ok := rJobContainerNames[constants.DatasetInitializer]; !ok {
 			allErrs = append(allErrs, field.Invalid(runtimeRefPath, newObj.Spec.RuntimeRef, fmt.Sprintf("must have %s job when trainJob is configured with input datasetConfig", constants.DatasetInitializer)))
@@ -146,7 +148,7 @@ func (j *JobSet) IdentifyPodNetwork(info *runtime.Info, trainJob *trainer.TrainJ
 		// TODO: Support multiple replicas for replicated Jobs.
 		// REF: https://github.com/kubeflow/trainer/issues/2318
 		podCount := info.TemplateSpec.PodSets[rJobIdx].Count
-		rJobReplicas := 1
+		rJobReplicas := constants.DefaultJobReplicas
 		info.TemplateSpec.PodSets[rJobIdx].Endpoints = func(yield func(string) bool) {
 			for podIdx := range ptr.Deref(podCount, 1) {
 				endpoint := fmt.Sprintf("%s-%s-%d-%d.%s", trainJob.Name, *rJob.Name, rJobReplicas-1, podIdx, subDomain)
@@ -194,7 +196,7 @@ func (j *JobSet) Build(ctx context.Context, info *runtime.Info, trainJob *traine
 	// TODO: Once we remove deprecated runtime.Info.Trainer, we should remove JobSet Builder with DeprecatedTrainer().
 	jobSet := jobSetBuilder.
 		Initializer(trainJob).
-		Launcher().
+		Launcher(info, trainJob).
 		Trainer(info, trainJob).
 		PodLabels(info.Scheduler.PodLabels).
 		Suspend(trainJob.Spec.Suspend).

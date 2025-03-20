@@ -34,11 +34,12 @@ const (
 	// ModelMountPath is the volumeMount path for model.
 	ModelMountPath string = "/workspace/model"
 
-	// JobTrainerNode is the Job name for the trainer node.
-	JobTrainerNode string = "trainer-node"
+	// AncestorTrainer is the ancestor name for Trainer, which is mostly used for the value of
+	// 'trainer.kubeflow.org/trainjob-ancestor-step'.
+	AncestorTrainer string = "trainer"
 
-	// ContainerTrainer is the container name for the trainer.
-	ContainerTrainer string = "trainer"
+	// Node is the name of the Job and container for the trainer node
+	Node string = "node"
 
 	// ContainerTrainerPort is the default port for the trainer nodes communication.
 	ContainerTrainerPort int32 = 29500
@@ -66,11 +67,9 @@ const (
 	// {"type": "Suspended", "status": "True", "reason": "Resumed"} condition.
 	TrainJobResumedMessage = "TrainJob is resumed"
 
-	// JobLauncher is the Job name for the launcher.
-	JobLauncher string = "launcher"
-
-	// ContainerLauncher is the container name for the launcher.
-	ContainerLauncher string = "launcher"
+	// Node is the name of the Job and container for the MPI launcher.
+	// When RunLauncherAsNode: true, for the launcher Job the container name is node.
+	Launcher string = "launcher"
 
 	// MPISSHAuthSecretSuffix is the name suffix for Secret with MPI SSH keys.
 	MPISSHAuthSecretSuffix string = "-mpi-ssh-auth"

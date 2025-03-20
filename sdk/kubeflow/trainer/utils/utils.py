@@ -17,7 +17,7 @@ import os
 import queue
 import textwrap
 import threading
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import kubeflow.trainer.models as models
 from kubeflow.trainer.constants import constants
@@ -43,30 +43,27 @@ def get_default_target_namespace() -> str:
 
 def get_container_devices(
     resources: Optional[models.IoK8sApiCoreV1ResourceRequirements],
-) -> Tuple[str, Union[str, float]]:
+) -> Optional[Tuple[str, str]]:
     """
     Get the device type and device count for the given container.
     """
 
+    # If containers resource limits are empty, return Unknown.
+    if resources is None or resources.limits is None:
+        return None
+
     # TODO (andreyvelich): We should discuss how to get container device type.
     # Potentially, we can use the trainer.kubeflow.org/device label from the runtime or
     # node types.
-    device = constants.UNKNOWN
-    device_count = constants.UNKNOWN
-
-    # If containers resource limits are empty, return Unknown.
-    if resources is None or resources.limits is None:
-        return device, device_count
-
     # TODO (andreyvelich): Support other resource labels (e.g. NPUs).
-    if constants.NVIDIA_GPU_LABEL in resources.limits:
-        device = constants.GPU_DEVICE_TYPE
-        device_count = resources.limits[constants.NVIDIA_GPU_LABEL].actual_instance
+    if constants.GPU_LABEL in resources.limits:
+        device = constants.GPU_LABEL.split("/")[1]
+        device_count = resources.limits[constants.GPU_LABEL].actual_instance
     elif constants.TPU_LABEL in resources.limits:
-        device = constants.TPU_DEVICE_TYPE
+        device = constants.TPU_LABEL.split("/")[1]
         device_count = resources.limits[constants.TPU_LABEL].actual_instance
     elif constants.CPU_LABEL in resources.limits:
-        device = constants.CPU_DEVICE_TYPE
+        device = constants.CPU_LABEL
         device_count = resources.limits[constants.CPU_LABEL].actual_instance
     else:
         raise Exception(
@@ -75,7 +72,141 @@ def get_container_devices(
     if device_count is None:
         raise Exception(f"Failed to get device count for resources: {resources.limits}")
 
-    return device, device_count
+    return device, str(device_count)
+
+
+def get_runtime_trainer_container(
+    replicated_jobs: List[models.JobsetV1alpha2ReplicatedJob],
+) -> Optional[models.IoK8sApiCoreV1Container]:
+    """
+    Get the runtime node container from the given replicated jobs.
+    """
+
+    for rjob in replicated_jobs:
+        if not (rjob.template.spec and rjob.template.spec.template.spec):
+            raise Exception(f"Invalid ReplicatedJob template: {rjob}")
+        # The ancestor labels define Trainer container in the ReplicatedJobs.
+        if not (
+            rjob.template.metadata
+            and rjob.template.metadata.labels
+            and constants.TRAINJOB_ANCESTOR_LABEL in rjob.template.metadata.labels
+        ):
+            continue
+
+        for container in rjob.template.spec.template.spec.containers:
+            if container.name == constants.NODE:
+                return container
+
+    return None
+
+
+def get_runtime_trainer(
+    replicated_jobs: List[models.JobsetV1alpha2ReplicatedJob],
+    ml_policy: models.TrainerV1alpha1MLPolicy,
+    runtime_metadata: models.IoK8sApimachineryPkgApisMetaV1ObjectMeta,
+) -> types.Trainer:
+    """
+    Get the runtime trainer object.
+    """
+
+    trainer_container = get_runtime_trainer_container(replicated_jobs)
+
+    if not (trainer_container and trainer_container.image):
+        raise Exception(f"Runtime doesn't have trainer container {replicated_jobs}")
+
+    # Extract image name from the container image to get appropriate Trainer.
+    image_name = trainer_container.image.split(":")[0]
+    trainer = types.ALL_TRAINERS.get(image_name, types.DEFAULT_TRAINER)
+
+    # Get the container devices.
+    if devices := get_container_devices(trainer_container.resources):
+        _, trainer.accelerator_count = devices
+
+    # Torch and MPI plugins override accelerator count.
+    if ml_policy.torch and ml_policy.torch.num_proc_per_node:
+        num_proc = ml_policy.torch.num_proc_per_node.actual_instance
+        if isinstance(num_proc, int):
+            trainer.accelerator_count = num_proc
+    elif ml_policy.mpi and ml_policy.mpi.num_proc_per_node:
+        trainer.accelerator_count = ml_policy.mpi.num_proc_per_node
+
+    # Multiply accelerator_count by the number of nodes.
+    if isinstance(trainer.accelerator_count, (int, float)) and ml_policy.num_nodes:
+        trainer.accelerator_count *= ml_policy.num_nodes
+
+    # TODO (andreyvelich): Currently, we get the accelerator type from
+    # the runtime labels.
+    if (
+        runtime_metadata.labels
+        and constants.ACCELERATOR_LABEL in runtime_metadata.labels
+    ):
+        trainer.accelerator = runtime_metadata.labels[constants.ACCELERATOR_LABEL]
+
+    return trainer
+
+
+def get_trainjob_initializer_step(
+    pod_name: str,
+    pod_spec: models.IoK8sApiCoreV1PodSpec,
+    pod_status: Optional[models.IoK8sApiCoreV1PodStatus],
+) -> types.Step:
+    """
+    Get the TrainJob initializer step from the given Pod name, spec, and status.
+    """
+
+    container = next(
+        c
+        for c in pod_spec.containers
+        if c.name in {constants.DATASET_INITIALIZER, constants.MODEL_INITIALIZER}
+    )
+
+    step = types.Step(
+        name=container.name,
+        status=pod_status.phase if pod_status else None,
+        pod_name=pod_name,
+    )
+
+    if devices := get_container_devices(container.resources):
+        step.device, step.device_count = devices
+
+    return step
+
+
+def get_trainjob_node_step(
+    pod_name: str,
+    pod_spec: models.IoK8sApiCoreV1PodSpec,
+    pod_status: Optional[models.IoK8sApiCoreV1PodStatus],
+    replicated_job_name: str,
+    job_index: int,
+) -> types.Step:
+    """
+    Get the TrainJob trainer node step from the given Pod name, spec, and status.
+    """
+
+    container = next(c for c in pod_spec.containers if c.name == constants.NODE)
+
+    step = types.Step(
+        name=f"{constants.NODE}-{job_index}",
+        status=pod_status.phase if pod_status else None,
+        pod_name=pod_name,
+    )
+
+    if devices := get_container_devices(container.resources):
+        step.device, step.device_count = devices
+
+    if container.env:
+        for env in container.env:
+            if env.value and env.value.isdigit():
+                if env.name == constants.TORCH_ENV_NUM_PROC_PER_NODE:
+                    step.device_count = env.value
+                elif env.name == constants.MPI_ENV_NUM_SLOTS_PER_NODE:
+                    # For the MPI use-cases, the launcher container is always node-0
+                    # Thus, we should increase the index for other nodes.
+                    step.device_count = env.value
+                    if replicated_job_name != constants.LAUNCHER:
+                        step.name = f"{constants.NODE}-{job_index+1}"
+
+    return step
 
 
 # TODO (andreyvelich): Discuss if we want to support V1ResourceRequirements resources as input.
@@ -101,14 +232,15 @@ def get_resources_per_node(
     return resources
 
 
-def get_args_using_train_func(
+def get_entrypoint_using_train_func(
+    runtime: types.Runtime,
     train_func: Callable,
-    train_func_parameters: Optional[Dict[str, Any]] = None,
+    train_func_parameters: Optional[Dict[str, Any]],
+    pip_index_url: str,
     packages_to_install: Optional[List[str]] = None,
-    pip_index_url: Optional[str] = constants.DEFAULT_PIP_INDEX_URL,
-) -> List[str]:
+) -> Tuple[List[str], List[str]]:
     """
-    Get the Trainer args from the given training function and parameters.
+    Get the Trainer command and args from the given training function and parameters.
     """
     # Check if training function is callable.
     if not callable(train_func):
@@ -139,33 +271,44 @@ def get_args_using_train_func(
     # Prepare the template to execute script.
     # Currently, we override the file where the training function is defined.
     # That allows to execute the training script with the entrypoint.
+    if runtime.trainer.entrypoint is None:
+        raise Exception(f"Runtime trainer must have an entrypoint: {runtime.trainer}")
+
+    # We don't allow to override python entrypoint for `mpirun`
+    if runtime.trainer.entrypoint[0] == "mpirun":
+        container_command = runtime.trainer.entrypoint
+        python_entrypoint = "python"
+        # The default file location is: /home/mpiuser/<FILE_NAME>.py
+        func_file = os.path.join(constants.DEFAULT_MPI_USER_HOME, func_file)
+    else:
+        container_command = constants.DEFAULT_COMMAND
+        python_entrypoint = " ".join(runtime.trainer.entrypoint)
+
     exec_script = textwrap.dedent(
         """
-                program_path=$(mktemp -d)
                 read -r -d '' SCRIPT << EOM\n
                 {func_code}
                 EOM
                 printf "%s" \"$SCRIPT\" > \"{func_file}\"
-                {entrypoint} \"{func_file}\""""
+                {python_entrypoint} \"{func_file}\""""
     )
 
     # Add function code to the execute script.
-    # TODO (andreyvelich): Add support for other entrypoints.
     exec_script = exec_script.format(
         func_code=func_code,
         func_file=func_file,
-        entrypoint=constants.ENTRYPOINT_TORCH,
+        python_entrypoint=python_entrypoint,
     )
 
     # Install Python packages if that is required.
-    if packages_to_install is not None and pip_index_url is not None:
+    if packages_to_install is not None:
         exec_script = (
             get_script_for_python_packages(packages_to_install, pip_index_url)
             + exec_script
         )
 
     # Return container command and args to execute training function.
-    return [exec_script]
+    return container_command, [exec_script]
 
 
 def get_script_for_python_packages(

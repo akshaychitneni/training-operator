@@ -33,11 +33,13 @@ def main():
     #         logging.error("STORAGE_URI must have the valid dataset provider")
     #         raise Exception
     try:
+        train_job_name = os.getenv("TRAIN_JOB_NAME", "cache-test")
         deploy_lws_with_substitution(
+            train_job_name,
             'pkg/initializers/dataset/cache-initializer-template.yaml',
             namespace='cache-test',
             substitutions={
-                'NAME': 'cache-lws-test',
+                'NAME': train_job_name,
                 'IAM_ROLE': 'arn:aws:iam::533547146520:role/kubeflow-infra-summit',
                 'SIZE': '3',
                 'IMAGE': 'docker.apple.com/achitneni/arrow_cache:b59025d',

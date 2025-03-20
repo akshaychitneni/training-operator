@@ -43,41 +43,44 @@ spec:
   template:
     spec:
       replicatedJobs:
-        - name: dataset-initializer
-          replicas: 1
-          template:
-            spec:
-              template:
-                spec:
-                  serviceAccountName: cache-initializer-sa
-                  containers:
-                    - name: dataset-initializer
-                      image: docker.apple.com/achitneni/cache_initializer:0c8441d7
-                      env:
-                        - name: IMAGE
-                          value: "docker.apple.com/achitneni/arrow_cache:b59025d"
-        - name: node
-          dependsOn:
-            - name: dataset-initializer
-              status: Complete
-          template:
-            metadata:
-              labels:
-                trainer.kubeflow.org/trainjob-ancestor-step: trainer
-            spec:
-              template:
-                spec:
-                  containers:
-                    - name: node
-                      image: pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime
-                      command:
-                        - /bin/bash
-                        - -c
-                        - |
-                          echo "Torch Distributed Runtime"
+      - name: dataset-initializer
+        replicas: 1
+        template:
+          metadata:
+            labels:
+              trainer.kubeflow.org/trainjob-ancestor-step: dataset-initializer
+          spec:
+            template:
+              spec:
+                serviceAccountName: cache-initializer-sa
+                containers:
+                  - name: dataset-initializer
+                    image: docker.apple.com/achitneni/cache_initializer:0c8441d7
+                    env:
+                      - name: IMAGE
+                        value: "docker.apple.com/achitneni/arrow_cache:b59025d"
+      - name: node
+        dependsOn:
+          - name: dataset-initializer
+            status: Complete
+        template:
+          metadata:
+            labels:
+              trainer.kubeflow.org/trainjob-ancestor-step: trainer
+          spec:
+            template:
+              spec:
+                containers:
+                  - name: node
+                    image: pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime
+                    command:
+                      - /bin/bash
+                      - -c
+                      - |
+                        echo "Torch Distributed Runtime"
 
-                          echo "--------------------------------------"
-                          echo "Torch Default Runtime Env"
-                          env | grep PET_
+                        echo "--------------------------------------"
+                        echo "Torch Default Runtime Env"
+                        env | grep PET_
 
-                          pip list
+                        pip list

@@ -2,8 +2,6 @@ apiVersion: trainer.kubeflow.org/v1alpha1
 kind: ClusterTrainingRuntime
 metadata:
   name: torch-distributed
-  labels:
-    trainer.kubeflow.org/phase: pre-training
 spec:
   mlPolicy:
     numNodes: 1
@@ -12,13 +10,16 @@ spec:
   template:
     spec:
       replicatedJobs:
-        - name: trainer-node
+        - name: node
           template:
+            metadata:
+              labels:
+                trainer.kubeflow.org/trainjob-ancestor-step: trainer
             spec:
               template:
                 spec:
                   containers:
-                    - name: trainer
+                    - name: node
                       image: pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime
                       command:
                         - /bin/bash

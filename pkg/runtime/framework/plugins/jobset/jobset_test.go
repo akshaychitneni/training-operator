@@ -74,7 +74,7 @@ func TestJobSet(t *testing.T) {
 				},
 			},
 		},
-		"trainer numNodes is respected rather than parallelism when replicatedJob name is trainer-node": {
+		"trainer numNodes is respected rather than parallelism when replicatedJob name is node": {
 			trainJob: utiltesting.MakeTrainJobWrapper(metav1.NamespaceDefault, "trainJob").
 				Obj(),
 			info: &runtime.Info{
@@ -86,11 +86,11 @@ func TestJobSet(t *testing.T) {
 				TemplateSpec: runtime.TemplateSpec{
 					PodSets: []runtime.PodSet{
 						{
-							Name:       constants.JobLauncher,
+							Name:       constants.Launcher,
 							Containers: make([]runtime.Container, 1),
 						},
 						{
-							Name:       constants.JobTrainerNode,
+							Name:       constants.Node,
 							Count:      ptr.To[int32](2),
 							Containers: make([]runtime.Container, 1),
 						},
@@ -98,7 +98,7 @@ func TestJobSet(t *testing.T) {
 					ObjApply: jobsetv1alpha2ac.JobSetSpec().
 						WithReplicatedJobs(
 							jobsetv1alpha2ac.ReplicatedJob().
-								WithName(constants.JobLauncher).
+								WithName(constants.Launcher).
 								WithTemplate(batchv1ac.JobTemplateSpec().
 									WithSpec(batchv1ac.JobSpec().
 										WithParallelism(1).
@@ -106,21 +106,21 @@ func TestJobSet(t *testing.T) {
 											WithSpec(corev1ac.PodSpec().
 												WithContainers(
 													corev1ac.Container().WithName("sidecar"),
-													corev1ac.Container().WithName(constants.ContainerLauncher),
+													corev1ac.Container().WithName(constants.Node),
 												),
 											),
 										),
 									),
 								),
 							jobsetv1alpha2ac.ReplicatedJob().
-								WithName(constants.JobTrainerNode).
+								WithName(constants.Node).
 								WithTemplate(batchv1ac.JobTemplateSpec().
 									WithSpec(batchv1ac.JobSpec().
 										WithParallelism(2).
 										WithTemplate(corev1ac.PodTemplateSpec().
 											WithSpec(corev1ac.PodSpec().
 												WithContainers(
-													corev1ac.Container().WithName(constants.ContainerTrainer),
+													corev1ac.Container().WithName(constants.Node),
 												),
 											),
 										),
@@ -138,26 +138,26 @@ func TestJobSet(t *testing.T) {
 				TemplateSpec: runtime.TemplateSpec{
 					PodSets: []runtime.PodSet{
 						{
-							Name:       constants.JobLauncher,
+							Name:       constants.Launcher,
 							Containers: make([]runtime.Container, 1),
 							Endpoints: func(yield func(string) bool) {
 								yield("trainJob-launcher-0-0.trainJob")
 							},
 						},
 						{
-							Name:       constants.JobTrainerNode,
+							Name:       constants.Node,
 							Count:      ptr.To[int32](2),
 							Containers: make([]runtime.Container, 1),
 							Endpoints: func(yield func(string) bool) {
-								yield("trainJob-trainer-node-0-0.trainJob")
-								yield("trainJob-trainer-node-0-1.trainJob")
+								yield("trainJob-node-0-0.trainJob")
+								yield("trainJob-node-0-1.trainJob")
 							},
 						},
 					},
 					ObjApply: jobsetv1alpha2ac.JobSetSpec().
 						WithReplicatedJobs(
 							jobsetv1alpha2ac.ReplicatedJob().
-								WithName(constants.JobLauncher).
+								WithName(constants.Launcher).
 								WithTemplate(batchv1ac.JobTemplateSpec().
 									WithSpec(batchv1ac.JobSpec().
 										WithParallelism(1).
@@ -165,21 +165,21 @@ func TestJobSet(t *testing.T) {
 											WithSpec(corev1ac.PodSpec().
 												WithContainers(
 													corev1ac.Container().WithName("sidecar"),
-													corev1ac.Container().WithName(constants.ContainerLauncher),
+													corev1ac.Container().WithName(constants.Node),
 												),
 											),
 										),
 									),
 								),
 							jobsetv1alpha2ac.ReplicatedJob().
-								WithName(constants.JobTrainerNode).
+								WithName(constants.Node).
 								WithTemplate(batchv1ac.JobTemplateSpec().
 									WithSpec(batchv1ac.JobSpec().
 										WithParallelism(2).
 										WithTemplate(corev1ac.PodTemplateSpec().
 											WithSpec(corev1ac.PodSpec().
 												WithContainers(
-													corev1ac.Container().WithName(constants.ContainerTrainer),
+													corev1ac.Container().WithName(constants.Node),
 												),
 											),
 										),
@@ -199,11 +199,11 @@ func TestJobSet(t *testing.T) {
 				TemplateSpec: runtime.TemplateSpec{
 					PodSets: []runtime.PodSet{
 						{
-							Name:       constants.JobLauncher,
+							Name:       constants.Launcher,
 							Containers: make([]runtime.Container, 1),
 						},
 						{
-							Name:       constants.JobTrainerNode,
+							Name:       constants.Node,
 							Containers: make([]runtime.Container, 1),
 						},
 					},
@@ -212,28 +212,28 @@ func TestJobSet(t *testing.T) {
 							WithSubdomain("kubeflow.org")).
 						WithReplicatedJobs(
 							jobsetv1alpha2ac.ReplicatedJob().
-								WithName(constants.JobLauncher).
+								WithName(constants.Launcher).
 								WithTemplate(batchv1ac.JobTemplateSpec().
 									WithSpec(batchv1ac.JobSpec().
 										WithParallelism(1).
 										WithTemplate(corev1ac.PodTemplateSpec().
 											WithSpec(corev1ac.PodSpec().
 												WithContainers(
-													corev1ac.Container().WithName(constants.ContainerLauncher),
+													corev1ac.Container().WithName(constants.Node),
 												),
 											),
 										),
 									),
 								),
 							jobsetv1alpha2ac.ReplicatedJob().
-								WithName(constants.JobTrainerNode).
+								WithName(constants.Node).
 								WithTemplate(batchv1ac.JobTemplateSpec().
 									WithSpec(batchv1ac.JobSpec().
 										WithParallelism(1).
 										WithTemplate(corev1ac.PodTemplateSpec().
 											WithSpec(corev1ac.PodSpec().
 												WithContainers(
-													corev1ac.Container().WithName(constants.ContainerTrainer),
+													corev1ac.Container().WithName(constants.Node),
 												),
 											),
 										),
@@ -249,17 +249,17 @@ func TestJobSet(t *testing.T) {
 				TemplateSpec: runtime.TemplateSpec{
 					PodSets: []runtime.PodSet{
 						{
-							Name:       constants.JobLauncher,
+							Name:       constants.Launcher,
 							Containers: make([]runtime.Container, 1),
 							Endpoints: func(yield func(string) bool) {
 								yield("trainJob-launcher-0-0.kubeflow.org")
 							},
 						},
 						{
-							Name:       constants.JobTrainerNode,
+							Name:       constants.Node,
 							Containers: make([]runtime.Container, 1),
 							Endpoints: func(yield func(string) bool) {
-								yield("trainJob-trainer-node-0-0.kubeflow.org")
+								yield("trainJob-node-0-0.kubeflow.org")
 							},
 						},
 					},
@@ -268,28 +268,28 @@ func TestJobSet(t *testing.T) {
 							WithSubdomain("kubeflow.org")).
 						WithReplicatedJobs(
 							jobsetv1alpha2ac.ReplicatedJob().
-								WithName(constants.JobLauncher).
+								WithName(constants.Launcher).
 								WithTemplate(batchv1ac.JobTemplateSpec().
 									WithSpec(batchv1ac.JobSpec().
 										WithParallelism(1).
 										WithTemplate(corev1ac.PodTemplateSpec().
 											WithSpec(corev1ac.PodSpec().
 												WithContainers(
-													corev1ac.Container().WithName(constants.ContainerLauncher),
+													corev1ac.Container().WithName(constants.Node),
 												),
 											),
 										),
 									),
 								),
 							jobsetv1alpha2ac.ReplicatedJob().
-								WithName(constants.JobTrainerNode).
+								WithName(constants.Node).
 								WithTemplate(batchv1ac.JobTemplateSpec().
 									WithSpec(batchv1ac.JobSpec().
 										WithParallelism(1).
 										WithTemplate(corev1ac.PodTemplateSpec().
 											WithSpec(corev1ac.PodSpec().
 												WithContainers(
-													corev1ac.Container().WithName(constants.ContainerTrainer),
+													corev1ac.Container().WithName(constants.Node),
 												),
 											),
 										),
