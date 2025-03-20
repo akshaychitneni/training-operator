@@ -45,7 +45,7 @@ def main():
             },
             timeout=600
         )
-        time.sleep(60)
+        time.sleep(30)
     except Exception as e:
         logging.error("error creating cache-lws")
         raise e

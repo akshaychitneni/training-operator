@@ -219,7 +219,7 @@ def get_dataset_initializer(
         if dataset.filter:
             envs.append(IoK8sApiCoreV1EnvVar.from_dict({"name": "FILTER", "value": ",".join(dataset.filter)}))
         print("creating dataset init with envs")
-        models.TrainerV1alpha1DatasetInitializer(
+        return models.TrainerV1alpha1DatasetInitializer(
             storageUri="arrowcache://",
             env=envs
         )
