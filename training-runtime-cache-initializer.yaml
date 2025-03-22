@@ -34,9 +34,6 @@ subjects:
 apiVersion: trainer.kubeflow.org/v1alpha1
 kind: ClusterTrainingRuntime
 metadata:
-  labels:
-    trainer.kubeflow.org/accelerator: gpu-tesla-v100-16gb
-    trainer.kubeflow.org/phase: pre-training
   name: torch-distributed-with-cache
 spec:
   mlPolicy:
@@ -54,34 +51,33 @@ spec:
                 spec:
                   serviceAccountName: cache-initializer-sa
                   containers:
-                  - name: dataset-initializer
-                    image: docker.apple.com/achitneni/cache_initializer:0a53c4d0
-                    env:
-                      - name: IMAGE
-                        value: "docker.apple.com/achitneni/arrow_cache:b59025d"
-        - name: trainer-node
-          replicas: 1
+                    - name: dataset-initializer
+                      image: docker.apple.com/achitneni/cache_initializer:0c8441d7
+                      env:
+                        - name: IMAGE
+                          value: "docker.apple.com/achitneni/arrow_cache:b59025d"
+        - name: node
           dependsOn:
             - name: dataset-initializer
               status: Complete
           template:
+            metadata:
+              labels:
+                trainer.kubeflow.org/trainjob-ancestor-step: trainer
             spec:
               template:
                 spec:
                   containers:
-                    - command:
+                    - name: node
+                      image: pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime
+                      command:
                         - /bin/bash
                         - -c
                         - |
                           echo "Torch Distributed Runtime"
-                          
+
                           echo "--------------------------------------"
                           echo "Torch Default Runtime Env"
                           env | grep PET_
-                          
+
                           pip list
-                      image: pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime
-                      name: trainer
-                      resources:
-                        limits:
-                          nvidia.com/gpu: 4
