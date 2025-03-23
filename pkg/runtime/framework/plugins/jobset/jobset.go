@@ -87,7 +87,7 @@ func (j *JobSet) Validate(runtimeJobTemplate client.Object, runtimeInfo *runtime
 	}
 
 	fmt.Println("JobSet in validate")
-	fmt.Println(*jobSet)
+	fmt.Println("%+v\n", *jobSet)
 
 	// TODO (andreyvelich): Refactor this test to verify the ancestor label in PodTemplate.
 	rJobContainerNames := make(map[string]sets.Set[string])
