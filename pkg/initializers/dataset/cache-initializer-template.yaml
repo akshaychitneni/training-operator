@@ -9,7 +9,7 @@ metadata:
 apiVersion: leaderworkerset.x-k8s.io/v1
 kind: LeaderWorkerSet
 metadata:
-  name: $NAME
+  name: $NAME-cache
 spec:
   replicas: 1
   leaderWorkerTemplate:
@@ -17,7 +17,7 @@ spec:
     leaderTemplate:
       metadata:
         labels:
-          app: $NAME-head
+          app: $NAME-cache-head
       spec:
         serviceAccountName: $NAME-sa
         containers:
@@ -62,10 +62,10 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: $NAME-service
+  name: $NAME-cache-service
 spec:
   selector:
-    app: $NAME-head
+    app: $NAME-cache-head
   ports:
     - protocol: TCP
       port: 50051

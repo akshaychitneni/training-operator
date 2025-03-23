@@ -55,7 +55,7 @@ spec:
                 serviceAccountName: cache-initializer-sa
                 containers:
                   - name: dataset-initializer
-                    image: docker.apple.com/achitneni/cache_initializer:0c8441d7
+                    image: docker.apple.com/achitneni/cache_initializer:dbcab018
                     env:
                       - name: IMAGE
                         value: "docker.apple.com/achitneni/arrow_cache:b59025d"

@@ -140,7 +140,7 @@ def deploy_lws_with_substitution(train_job_name, yaml_path, config_file: Optiona
         return True
 
     except ApiException as e:
-        print(f"Deployment failed: {e.reason}")
+        print(f"Deployment failed: {e}")
         for sa_name, ns in created_sa:
             try:
                 core_v1.delete_namespaced_service_account(
