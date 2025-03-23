@@ -51,15 +51,17 @@ def deploy_lws_with_substitution(train_job_name, yaml_path, config_file: Optiona
         namespace=namespace,
         name=train_job_name
     )
+    print(f"trainJob: {training_job}")
 
     # Create owner reference from TrainingJob
-    owner_ref = V1OwnerReference(
-        api_version="trainer.kubeflow.org/v1alpha1",
-        kind="TrainJob",
-        name=training_job["metadata"]["name"],
-        uid=training_job["metadata"]["uid"],
-        block_owner_deletion=False
-    )
+    owner_ref = {
+        "apiVersion": training_job["apiVersion"],
+        "kind": training_job["kind"],
+        "name": training_job["metadata"]["name"],
+        "uid": training_job["metadata"]["uid"],
+        "controller": True,
+        "blockOwnerDeletion": True
+    }
 
     created_lws = []
     created_sa = []
@@ -85,11 +87,16 @@ def deploy_lws_with_substitution(train_job_name, yaml_path, config_file: Optiona
             #     except Exception as e:
             #         print(f"Error checking ServiceAccount: {e}")
             #         raise
-            resource['metadata']['owner_references'] = [owner_ref]
+            if "ownerReferences" in resource["metadata"]:
+                resource["metadata"]["ownerReferences"].append(owner_ref)
+            else:
+                resource["metadata"]["ownerReferences"] = [owner_ref]
+
             if resource['kind'] == 'LeaderWorkerSet':
                 created_lws.append(resource)
             else:
                 try:
+                    print(f"creating resource {resource}")
                     utils.create_from_dict(api_client, resource, namespace=namespace)
                 except FailToCreateError as ex:
                     for e in ex.api_exceptions:
