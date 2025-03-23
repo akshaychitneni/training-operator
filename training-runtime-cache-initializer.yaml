@@ -59,6 +59,11 @@ spec:
                     env:
                       - name: IMAGE
                         value: "docker.apple.com/achitneni/arrow_cache:b59025d"
+                      - name: TRAIN_JOB_NAME
+                        valueFrom:
+                          fieldRef:
+                            apiVersion: v1
+                            fieldPath: metadata.labels['jobset.sigs.k8s.io/jobset-name']
       - name: node
         dependsOn:
           - name: dataset-initializer

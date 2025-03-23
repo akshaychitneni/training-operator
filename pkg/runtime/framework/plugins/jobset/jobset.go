@@ -86,20 +86,15 @@ func (j *JobSet) Validate(runtimeJobTemplate client.Object, runtimeInfo *runtime
 		return nil, nil
 	}
 
-	fmt.Println("JobSet in validate")
-	fmt.Println("%+v\n", *jobSet)
-
 	// TODO (andreyvelich): Refactor this test to verify the ancestor label in PodTemplate.
 	rJobContainerNames := make(map[string]sets.Set[string])
 	for _, rJob := range jobSet.Spec.ReplicatedJobs {
-		fmt.Println(rJob)
 		rJobContainerNames[rJob.Name] = sets.New[string]()
 		for _, c := range rJob.Template.Spec.Template.Spec.Containers {
 			rJobContainerNames[rJob.Name].Insert(c.Name)
 		}
 	}
 
-	fmt.Println(rJobContainerNames)
 	if newObj.Spec.Initializer != nil && newObj.Spec.Initializer.Dataset != nil {
 		if containerSet, ok := rJobContainerNames[constants.DatasetInitializer]; !ok {
 			allErrs = append(allErrs, field.Invalid(runtimeRefPath, newObj.Spec.RuntimeRef, fmt.Sprintf("must have %s job when trainJob is configured with input datasetConfig", constants.DatasetInitializer)))

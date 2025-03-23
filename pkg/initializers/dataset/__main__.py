@@ -43,7 +43,6 @@ def main():
                 'IAM_ROLE': 'arn:aws:iam::533547146520:role/kubeflow-infra-summit',
                 'SIZE': '3',
                 'IMAGE': 'docker.apple.com/achitneni/arrow_cache:b59025d',
-
             },
             timeout=600
         )
