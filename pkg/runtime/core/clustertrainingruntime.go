@@ -83,5 +83,7 @@ func (r *ClusterTrainingRuntime) ValidateObjects(ctx context.Context, old, new *
 	jobSetTemplate := jobsetv1alpha2.JobSet{
 		Spec: clusterTrainingRuntime.Spec.Template.Spec,
 	}
+	fmt.Println("JobSet in clusterTrainingRuntime")
+	fmt.Println(jobSetTemplate)
 	return r.framework.RunCustomValidationPlugins(jobSetTemplate.DeepCopy(), info, old, new)
 }
