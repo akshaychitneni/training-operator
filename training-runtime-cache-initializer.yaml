@@ -3,6 +3,20 @@ kind: ServiceAccount
 metadata:
   name: cache-initializer-sa
 ---
+#apiVersion: rbac.authorization.k8s.io/v1
+#kind: RoleBinding
+#metadata:
+#  name: psp:privileged:binding
+#  namespace: cache-test
+#roleRef:
+#  apiGroup: rbac.authorization.k8s.io
+#  kind: ClusterRole
+#  name: eks:podsecuritypolicy:privileged
+#subjects:
+#  - kind: ServiceAccount
+#    name: cache-initializer-sa
+#    namespace: cache-test
+#---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -10,7 +24,7 @@ metadata:
 rules:
   - apiGroups: ["*"]
     resources:
-      - leaderworksets
+      - leaderworkersets
       - services
       - serviceaccounts
     verbs: ["create", "get", "list", "watch"]
@@ -55,7 +69,7 @@ spec:
                 serviceAccountName: cache-initializer-sa
                 containers:
                   - name: dataset-initializer
-                    image: docker.apple.com/achitneni/cache_initializer:dbcab018
+                    image: docker.apple.com/achitneni/cache_initializer:2f3f2a37
                     env:
                       - name: IMAGE
                         value: "docker.apple.com/achitneni/arrow_cache:b59025d"
@@ -78,6 +92,12 @@ spec:
                 containers:
                   - name: node
                     image: pytorch/pytorch:2.5.0-cuda12.4-cudnn9-runtime
+                    env:
+                      - name: TRAIN_JOB_NAME
+                        valueFrom:
+                          fieldRef:
+                            apiVersion: v1
+                            fieldPath: metadata.labels['jobset.sigs.k8s.io/jobset-name']
                     command:
                       - /bin/bash
                       - -c
