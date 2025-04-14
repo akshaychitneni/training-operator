@@ -37,6 +37,12 @@ spec:
           env:
             - name: RUNTIME_ENV
               value: "CLOUD"
+            - name: METADATA_LOC
+              value: $METADATA_LOC
+            - name: TABLE_NAME
+              value: $TABLE_NAME
+            - name: SCHEMA_NAME
+              value: $SCHEMA_NAME
           ports:
             - containerPort: 50051
     workerTemplate:
@@ -58,6 +64,13 @@ spec:
               memory: "2Gi"
           ports:
           - containerPort: 50051
+          env:
+            - name: METADATA_LOC
+              value: $METADATA_LOC
+            - name: TABLE_NAME
+              value: $TABLE_NAME
+            - name: SCHEMA_NAME
+              value: $SCHEMA_NAME
 ---
 apiVersion: v1
 kind: Service

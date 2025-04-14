@@ -34,6 +34,11 @@ def main():
     #         raise Exception
     try:
         train_job_name = os.getenv("TRAIN_JOB_NAME", "cache-test")
+        cache_image = os.getenv("IMAGE_NAME", "docker.apple.com/achitneni/arrow_cache:b59025d")
+        cache_size = os.getenv("CLUSTER_SIZE", "3")
+        metadata_loc = os.getenv("METADATA_LOC")
+        table_name = os.getenv("TABLE_NAME")
+        schema_name = os.getenv("SCHEMA_NAME")
         deploy_lws_with_substitution(
             train_job_name,
             'pkg/initializers/dataset/cache-initializer-template.yaml',
@@ -41,8 +46,11 @@ def main():
             substitutions={
                 'NAME': train_job_name,
                 'IAM_ROLE': 'arn:aws:iam::533547146520:role/kubeflow-infra-summit',
-                'SIZE': '3',
-                'IMAGE': 'docker.apple.com/achitneni/arrow_cache:b59025d',
+                'SIZE': cache_size,
+                'IMAGE': cache_image,
+                'METADATA_LOC': metadata_loc,
+                'TABLE_NAME': table_name,
+                'SCHEMA_NAME': schema_name,
             },
             timeout=600
         )
