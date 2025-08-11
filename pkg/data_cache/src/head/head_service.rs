@@ -1,3 +1,14 @@
+use std::collections::HashMap;
+use arrow_flight::{flight_service_server::{FlightService}, Action, Criteria, Empty, FlightData, FlightDescriptor, FlightEndpoint, FlightInfo, HandshakeRequest, HandshakeResponse, Location, PollInfo, PutResult, SchemaResult, Ticket};
+use futures::Stream;
+use std::pin::Pin;
+use std::sync::Arc;
+use arrow_flight::flight_service_server::FlightServiceServer;
+use arrow_schema::{DataType, Field, Schema, SchemaRef};
+use bytes::Bytes;
+use datafusion::prelude::SessionContext;
+use tonic::{Request, Response, Status, Streaming};
+use tracing::info;
 use crate::head::head::Distributor;
 use crate::head::provider::DataFileTableProvider;
 use arrow_flight::flight_service_server::FlightServiceServer;
@@ -62,8 +73,14 @@ use tonic::{Request, Response, Status, Streaming};
 /// - [`Distributor`]: Handles data distribution and worker coordination
 /// - [`get_partition_range`]: Calculates data partitioning ranges
 /// - [`IndexPair`]: Represents row ranges in flight tickets
-pub(crate) struct HeadService {
+pub struct HeadService {
     distributor: Distributor,
+}
+
+impl HeadService {
+    pub fn new(distributor: Distributor) -> Self {
+        Self { distributor }
+    }
 }
 
 #[tonic::async_trait]
@@ -203,8 +220,7 @@ impl FlightService for HeadService {
         };
 
         let flight_info = flight_info
-            .try_with_schema(arrow_schema().as_ref())
-            .map_err(|e| Status::internal(format!("Schema error: {}", e)))?; // TODO:// pass correct schema
+            .try_with_schema(metadata_arrow_schema().as_ref()).map_err(|e| Status::internal(format!("Schema error: {}", e)))?; // TODO:// pass correct schema
         Ok(Response::new(flight_info))
     }
     async fn poll_flight_info(
@@ -269,8 +285,8 @@ impl FlightService for HeadService {
     }
 }
 
-use arrow_cache::config::config::CacheConfig;
 use serde::{Deserialize, Serialize};
+use crate::config::config::CacheConfig;
 
 /// Represents a row range for distributed query execution.
 ///
@@ -315,31 +331,21 @@ pub async fn run(
     let ctx = Arc::new(SessionContext::new());
     let addr = format!("{host}:{port}").parse()?;
     let num_workers = workers.len();
-    let schema = arrow_schema();
-    let cache_config = CacheConfig::shared_from_env()
-        .map_err(|e| format!("Failed to load dataset config: {}", e))?;
+    let cache_config = CacheConfig::shared_from_env().map_err(|e| format!("Failed to load dataset config: {}", e))?;
+    let metadata_schema = metadata_arrow_schema();
+    info!("Creating DataFileTableProvider with schema: {:?}", metadata_schema);
     let provider = DataFileTableProvider::new(
         &cache_config.dataset.metadata_loc,
         &cache_config.dataset.table_name,
         &cache_config.dataset.schema_name,
-        schema.clone(),
-        num_workers,
-    )
-    .await
-    .map_err(|e| format!("Failed to create provider: {}", e))?;
+        metadata_schema.clone(),
+        num_workers
+    ).await.map_err(|e| format!("Failed to create provider: {}", e))?;
     let mut worker_map: HashMap<String, String> = HashMap::new();
     for (index, worker_uri) in workers.into_iter().enumerate() {
         worker_map.insert(index.to_string(), format!("grpc://{worker_uri}"));
     }
-    let mut distributor = Distributor::new(
-        ctx,
-        num_workers,
-        Arc::new(provider),
-        "memtable".to_string(),
-        Arc::new(worker_map),
-        schema.clone(),
-        cache_config,
-    );
+    let mut distributor = Distributor::new(ctx, num_workers, Arc::new(provider), "memtable".to_string(), Arc::new(worker_map), metadata_arrow_schema(), cache_config);
     let _ = distributor.init().await;
     let service = HeadService { distributor };
     tonic::transport::Server::builder()
@@ -350,7 +356,7 @@ pub async fn run(
     Ok(())
 }
 
-fn arrow_schema() -> SchemaRef {
+fn metadata_arrow_schema() -> SchemaRef {
     let columns = vec![
         Field::new("worker_ids", DataType::UInt64, false),
         Field::new("row_start_indexes", DataType::UInt64, false),

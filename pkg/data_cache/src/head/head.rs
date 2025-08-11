@@ -11,9 +11,10 @@ use datafusion::physical_plan::repartition::RepartitionExec;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::TableReference;
 use futures::StreamExt;
-use std::collections::HashMap;
-use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{info, error};
+use crate::config::config::CacheConfig;
+use crate::head::provider::DataFileTableProvider;
+use crate::head::writer::DistributedWriterExec;
 
 pub struct Distributor {
     ctx: Arc<SessionContext>,

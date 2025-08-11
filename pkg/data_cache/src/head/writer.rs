@@ -19,7 +19,21 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info};
+use arrow::array::UInt64Array;
+use arrow::record_batch::RecordBatch;
+use arrow_flight::encode::FlightDataEncoderBuilder;
+use arrow_flight::FlightClient;
+use arrow_schema::{DataType, SchemaRef};
+use datafusion::execution::{SendableRecordBatchStream, TaskContext};
+use datafusion::physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion::physical_plan::{DisplayAs, DisplayFormatType, EmptyRecordBatchStream, ExecutionPlan, PlanProperties};
+use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
+use datafusion::error::{DataFusionError, Result};
+use datafusion::common::exec_err;
+use datafusion::physical_plan::execution_plan::{Boundedness, EmissionType};
+use futures::{StreamExt, TryStreamExt};
+use tracing::{info, error};
+use crate::config::config::CacheConfig;
 
 /// Execution plan for distributed writing to worker nodes via Apache Arrow Flight.
 ///
@@ -53,11 +67,11 @@ use tracing::{error, info};
 /// │  Input Plan     │───▶│ Distributed     │───▶│  Worker Node 1  │
 /// │ (worker tasks)  │    │  WriterExec     │    │  (via Flight)   │
 /// └─────────────────┘    └─────────────────┘    └─────────────────┘
-///                                 │                       
+///                                 │
 ///                                 ├──────────────────────▶│  Worker Node 2  │
 ///                                 │                       │  (via Flight)   │
 ///                                 │                       └─────────────────┘
-///                                 │                       
+///                                 │
 ///                                 └──────────────────────▶│  Worker Node N  │
 ///                                                         │  (via Flight)   │
 ///                                                         └─────────────────┘
@@ -299,11 +313,7 @@ impl ExecutorClient {
         Ok(Self { flight_client })
     }
 
-    pub async fn send_batch(
-        &mut self,
-        schema: SchemaRef,
-        record_batches: Vec<arrow_flight::error::Result<RecordBatch>>,
-    ) -> Result<SendableRecordBatchStream> {
+    pub async fn send_batch(&mut self, schema: SchemaRef, record_batches: Vec<arrow_flight::error::Result<RecordBatch>>) -> Result<SendableRecordBatchStream> {
         let flight_data_stream = FlightDataEncoderBuilder::new()
             .build(futures::stream::iter(record_batches.into_iter()));
         self.flight_client
