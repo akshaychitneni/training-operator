@@ -13,15 +13,20 @@ use datafusion::physical_plan::stream::RecordBatchStreamAdapter;
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PlanProperties, RecordBatchStream,
 };
-use futures::{Stream, StreamExt, TryStreamExt};
+use futures::{future, Stream, StreamExt, TryStreamExt};
 use iceberg::TableIdent;
 use iceberg::arrow::schema_to_arrow_schema;
 use iceberg::io::FileIO;
 use iceberg::scan::{FileScanTask, FileScanTaskStream};
 use iceberg::table::{StaticTable, Table};
 use iceberg_datafusion::{from_datafusion_error, to_datafusion_error};
-use tracing::{info, error};
 use object_store::aws::AmazonS3Builder;
+use std::any::Any;
+use std::fmt::{Debug, Formatter};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use tracing::{error, info};
 use url::Url;
 
 /// Worker node data source for distributed Arrow caching system.
@@ -267,10 +272,17 @@ impl ExecutionPlan for WorkerExec {
         _partition: usize,
         _context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        info!("WorkerExec::execute called with file_urls: {:?}", self.file_urls);
-        let stream = futures::stream::once(read_stream(self.inner.clone(), self.file_urls.clone())).try_flatten();
+        info!(
+            "WorkerExec::execute called with file_urls: {:?}",
+            self.file_urls
+        );
+        let stream = futures::stream::once(read_stream(self.inner.clone(), self.file_urls.clone()))
+            .try_flatten();
         info!("WorkerExec::execute created stream, returning RecordBatchStreamAdapter");
-        Ok(Box::pin(RecordBatchStreamAdapter::new(self.schema.clone(), stream)))
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema.clone(),
+            stream,
+        )))
     }
 }
 
@@ -454,20 +466,32 @@ impl Stream for RowNumberStream {
                 // Debug the schemas for diagnosis
                 let input_schema = batch.schema();
                 let expected_schema = self.schema.clone();
-                info!("RowNumberStream: Input batch schema: {:?} with {} columns", input_schema, input_schema.fields().len());
-                info!("RowNumberStream: Expected output schema: {:?} with {} columns", expected_schema, expected_schema.fields().len());
+                info!(
+                    "RowNumberStream: Input batch schema: {:?} with {} columns",
+                    input_schema,
+                    input_schema.fields().len()
+                );
+                info!(
+                    "RowNumberStream: Expected output schema: {:?} with {} columns",
+                    expected_schema,
+                    expected_schema.fields().len()
+                );
 
                 // If the schemas don't match (except for the cache_index we'll add), create a new schema
                 // that combines the input columns with the cache_index column
-                let actual_schema = if input_schema.fields().len() + 1 != expected_schema.fields().len() {
-                    let mut builder = arrow_schema::SchemaBuilder::from(input_schema.fields());
-                    builder.push(Field::new("cache_index", DataType::UInt64, false));
-                    let new_schema = Arc::new(Schema::new(builder.finish().fields));
-                    info!("RowNumberStream: Created new compatible schema: {:?}", new_schema);
-                    new_schema
-                } else {
-                    expected_schema
-                };
+                let actual_schema =
+                    if input_schema.fields().len() + 1 != expected_schema.fields().len() {
+                        let mut builder = arrow_schema::SchemaBuilder::from(input_schema.fields());
+                        builder.push(Field::new("cache_index", DataType::UInt64, false));
+                        let new_schema = Arc::new(Schema::new(builder.finish().fields));
+                        info!(
+                            "RowNumberStream: Created new compatible schema: {:?}",
+                            new_schema
+                        );
+                        new_schema
+                    } else {
+                        expected_schema
+                    };
 
                 let mut new_columns = batch.columns().to_vec();
 
@@ -488,8 +512,10 @@ impl Stream for RowNumberStream {
     }
 }
 
-async fn read_stream(table: Table, file_urls: Vec<String>)
-    -> Result<Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>>  {
+async fn read_stream(
+    table: Table,
+    file_urls: Vec<String>,
+) -> Result<Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>> {
     info!("read_stream: Starting with file_urls: {:?}", file_urls);
     let reader = table.reader_builder().build();
 
@@ -528,16 +554,27 @@ async fn read_stream(table: Table, file_urls: Vec<String>)
         }
     }
 
-    info!("read_stream: Iceberg scan completed - total_planned_files={}, matched_files={}", total_planned, matched.len());
+    info!(
+        "read_stream: Iceberg scan completed - total_planned_files={}, matched_files={}",
+        total_planned,
+        matched.len()
+    );
 
     // If Iceberg has no files or none matched, fallback to direct parquet reading
     if total_planned == 0 || matched.is_empty() {
-        info!("read_stream: Falling back to direct Parquet reading (total_planned={}, matched={})", total_planned, matched.len());
+        info!(
+            "read_stream: Falling back to direct Parquet reading (total_planned={}, matched={})",
+            total_planned,
+            matched.len()
+        );
         return read_parquet_files_directly((*file_urls_arc).clone()).await;
     }
 
     // Build a stream from matched tasks and let Iceberg reader read them
-    info!("read_stream: Building Iceberg reader stream with {} matched files", matched.len());
+    info!(
+        "read_stream: Building Iceberg reader stream with {} matched files",
+        matched.len()
+    );
     let matched_stream = futures::stream::iter(matched.into_iter().map(Ok));
     let stream = reader
         .read(Box::pin(matched_stream))
@@ -548,6 +585,7 @@ async fn read_stream(table: Table, file_urls: Vec<String>)
     Ok(Box::pin(stream))
 }
 
+#[allow(dead_code)]
 async fn filter_and_create_stream(
     result: Result<FileScanTaskStream>,
     file_urls: Arc<Vec<String>>,
@@ -558,20 +596,26 @@ async fn filter_and_create_stream(
             Ok(Box::pin(
                 stream
                     .try_filter(move |task| {
-                        info!("Checking file task path: '{}' against URLs: {:?}", task.data_file_path, file_urls);
+                        info!(
+                            "Checking file task path: '{}' against URLs: {:?}",
+                            task.data_file_path, file_urls
+                        );
                         let matches = file_urls.clone().contains(&task.data_file_path);
                         info!("File '{}' matches: {}", task.data_file_path, matches);
                         future::ready(matches)
                     })
-                    .map(|result| result)
+                    .map(|result| result),
             ))
         }
-        Err(e) => Ok(Box::pin(futures::stream::once(future::ready(Err(from_datafusion_error(e)))))),
+        Err(e) => Ok(Box::pin(futures::stream::once(future::ready(Err(
+            from_datafusion_error(e),
+        ))))),
     }
 }
 
-async fn read_parquet_files_directly(file_urls: Vec<String>)
-    -> Result<Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>> {
+async fn read_parquet_files_directly(
+    file_urls: Vec<String>,
+) -> Result<Pin<Box<dyn Stream<Item = Result<RecordBatch>> + Send>>> {
     info!("Reading Parquet files directly: {:?}", file_urls);
 
     use datafusion::prelude::SessionContext;
@@ -590,8 +634,10 @@ async fn read_parquet_files_directly(file_urls: Vec<String>)
             // Extract unique bucket names from all S3 URLs
             let mut buckets = std::collections::HashSet::new();
             for file_url in &file_urls {
-                if let Some(bucket) = file_url.strip_prefix("s3://")
-                    .and_then(|path| path.split('/').next()) {
+                if let Some(bucket) = file_url
+                    .strip_prefix("s3://")
+                    .and_then(|path| path.split('/').next())
+                {
                     buckets.insert(bucket);
                 }
             }
@@ -603,11 +649,13 @@ async fn read_parquet_files_directly(file_urls: Vec<String>)
                     .with_secret_access_key(&aws_secret_key)
                     .with_region(&aws_region)
                     .with_bucket_name(bucket)
-                    .build().map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
+                    .build()
+                    .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
 
                 let bucket_url = Url::parse(&format!("s3://{}/", bucket))
                     .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
-                ctx.runtime_env().register_object_store(&bucket_url, Arc::new(s3_store));
+                ctx.runtime_env()
+                    .register_object_store(&bucket_url, Arc::new(s3_store));
                 info!("Registered S3 object store for bucket: {}", bucket);
             }
         } else {
@@ -622,7 +670,9 @@ async fn read_parquet_files_directly(file_urls: Vec<String>)
         info!("Reading Parquet file: {}", file_url);
 
         // Read the Parquet file using DataFusion
-        let df = ctx.read_parquet(&file_url, Default::default()).await
+        let df = ctx
+            .read_parquet(&file_url, Default::default())
+            .await
             .map_err(|e| datafusion::error::DataFusionError::External(Box::new(e)))?;
 
         let batches = df.collect().await?;
@@ -632,7 +682,11 @@ async fn read_parquet_files_directly(file_urls: Vec<String>)
         if !batches.is_empty() {
             let batch_schema = batches[0].schema();
             info!("Parquet file {} schema: {:?}", file_url, batch_schema);
-            info!("Parquet file {} has {} columns", file_url, batch_schema.fields().len());
+            info!(
+                "Parquet file {} has {} columns",
+                file_url,
+                batch_schema.fields().len()
+            );
         }
 
         all_batches.extend(batches);

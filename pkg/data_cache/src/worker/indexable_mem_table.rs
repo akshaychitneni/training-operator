@@ -8,7 +8,7 @@ use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::execution::SessionState;
 use datafusion::logical_expr::{BinaryExpr, Expr, TableProviderFilterPushDown};
 use datafusion::physical_plan::ExecutionPlan;
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use std::any::Any;
 use std::sync::Arc;
 use tracing::{error, info};
@@ -75,7 +75,10 @@ impl IndexableMemTable {
                         indices.push(current_index);
                         current_index += num_rows as u64;
                         data.push(batch);
-                        info!("Loaded batch with {} rows, current_index now {}", num_rows, current_index);
+                        info!(
+                            "Loaded batch with {} rows, current_index now {}",
+                            num_rows, current_index
+                        );
                     } else {
                         info!("Skipping empty batch");
                     }
@@ -90,15 +93,21 @@ impl IndexableMemTable {
 
         info!("Number of batches loaded: {}", data.len());
         if !data.is_empty() {
-            info!("Successfully loaded {} total rows from {} to {}",
-                  current_index - start_index, start_index, current_index - 1);
+            info!(
+                "Successfully loaded {} total rows from {} to {}",
+                current_index - start_index,
+                start_index,
+                current_index - 1
+            );
 
             // Use the actual schema from the loaded batches instead of the expected schema
             let actual_schema = data[0].schema();
             info!("Using actual batch schema: {:?}", actual_schema);
             IndexableMemTable::try_new(actual_schema, vec![data], indices)
         } else {
-            error!("No batches loaded from data source - fallback logic should have been triggered but produced no data");
+            error!(
+                "No batches loaded from data source - fallback logic should have been triggered but produced no data"
+            );
             IndexableMemTable::try_new(Arc::clone(&schema), vec![data], indices)
         }
     }
@@ -138,9 +147,9 @@ async fn fetch_partitions(
     if batches.is_empty() {
         vec![]
     } else if start_index < end_index {
-        batches[start_index..=end_index-1].to_owned()
+        batches[start_index..=end_index - 1].to_owned()
     } else if start_index == end_index && end_index > 0 {
-        vec![batches[end_index-1].to_owned()]
+        vec![batches[end_index - 1].to_owned()]
     } else {
         vec![]
     }

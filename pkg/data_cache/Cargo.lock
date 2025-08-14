@@ -382,6 +382,7 @@ dependencies = [
  "bincode",
  "bytes",
  "datafusion",
+ "fastrand",
  "futures",
  "iceberg",
  "iceberg-datafusion",

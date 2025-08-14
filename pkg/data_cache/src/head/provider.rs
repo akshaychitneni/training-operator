@@ -1,8 +1,7 @@
-use std::any::Any;
-use std::fmt::Formatter;
-use std::sync::Arc;
-use arrow::array::{Array, ArrayRef, GenericListBuilder, RecordBatch, StringViewBuilder, UInt64Array};
-use arrow_schema::{SchemaRef};
+use arrow::array::{
+    Array, ArrayRef, GenericListBuilder, RecordBatch, StringViewBuilder, UInt64Array,
+};
+use arrow_schema::SchemaRef;
 use async_trait::async_trait;
 use datafusion::catalog::Session;
 use datafusion::datasource::{TableProvider, TableType};
@@ -73,20 +72,38 @@ pub struct DataFileTableProvider {
     num_workers: usize,
 }
 impl DataFileTableProvider {
-    pub async fn new(metadata_loc: &String, table_name:  &String, schema_name:  &String, arrow_schema: SchemaRef, num_workers: usize) -> Result<Self, Box<dyn std::error::Error>> {
-        info!("DataFileTableProvider::new called with arrow_schema: {:?}", arrow_schema);
-        let file_io = FileIO::from_path(metadata_loc).map_err(|e| format!("Failed to create FileIO: {}", e))?.build().map_err(|e| format!("Failed to build FileIO: {}", e))?;
-        let table_indent = TableIdent::from_strs([schema_name, table_name]).map_err(|e| format!("Failed to create table ident: {}", e))?;
-        let static_table = StaticTable::from_metadata_file(metadata_loc, table_indent, file_io).await.map_err(|e| format!("Failed to load static table: {}", e))?;
+    pub async fn new(
+        metadata_loc: &String,
+        table_name: &String,
+        schema_name: &String,
+        arrow_schema: SchemaRef,
+        num_workers: usize,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        info!(
+            "DataFileTableProvider::new called with arrow_schema: {:?}",
+            arrow_schema
+        );
+        let file_io = FileIO::from_path(metadata_loc)
+            .map_err(|e| format!("Failed to create FileIO: {}", e))?
+            .build()
+            .map_err(|e| format!("Failed to build FileIO: {}", e))?;
+        let table_indent = TableIdent::from_strs([schema_name, table_name])
+            .map_err(|e| format!("Failed to create table ident: {}", e))?;
+        let static_table = StaticTable::from_metadata_file(metadata_loc, table_indent, file_io)
+            .await
+            .map_err(|e| format!("Failed to load static table: {}", e))?;
         let table = static_table.into_table();
         info!("Iceberg table loaded successfully");
         // Use the provided metadata schema instead of Iceberg table schema
         let provider = Self {
             inner: table,
             schema: arrow_schema.clone(), // This should be the metadata schema (worker_ids, row_start_indexes, etc.)
-            num_workers
+            num_workers,
         };
-        info!("DataFileTableProvider created with schema: {:?}", provider.schema);
+        info!(
+            "DataFileTableProvider created with schema: {:?}",
+            provider.schema
+        );
         Ok(provider)
     }
 }
@@ -97,7 +114,10 @@ impl TableProvider for DataFileTableProvider {
     }
 
     fn schema(&self) -> SchemaRef {
-        info!("DataFileTableProvider returning metadata schema: {:?}", self.schema);
+        info!(
+            "DataFileTableProvider returning metadata schema: {:?}",
+            self.schema
+        );
         self.schema.clone()
     }
 
@@ -112,20 +132,36 @@ impl TableProvider for DataFileTableProvider {
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let tablescan = self.inner.scan().build()
-            .map_err(|e| DataFusionError::Execution(format!("Failed to build table scan: {}", e)))?;
+        let tablescan = self.inner.scan().build().map_err(|e| {
+            DataFusionError::Execution(format!("Failed to build table scan: {}", e))
+        })?;
 
         // Try to get file scan tasks from Iceberg metadata
-        let file_scan_task_stream = tablescan.plan_files().await.map_err(|e| DataFusionError::Execution(format!("Failed to plan files: {}", e)))?;
-        let partitions = partition_tasks(file_scan_task_stream, self.num_workers).await.map_err(|e| DataFusionError::Execution(format!("Failed to partition tasks: {}", e)))?;
+        let file_scan_task_stream = tablescan
+            .plan_files()
+            .await
+            .map_err(|e| DataFusionError::Execution(format!("Failed to plan files: {}", e)))?;
+        let partitions = partition_tasks(file_scan_task_stream, self.num_workers)
+            .await
+            .map_err(|e| DataFusionError::Execution(format!("Failed to partition tasks: {}", e)))?;
 
         info!("Partition count: {}", partitions.len());
-        info!("Total tasks across all partitions: {}", partitions.iter().map(|p| p.tasks.len()).sum::<usize>());
+        info!(
+            "Total tasks across all partitions: {}",
+            partitions.iter().map(|p| p.tasks.len()).sum::<usize>()
+        );
 
         // If we got empty partitions (no file scan tasks), create fallback tasks
         let partitions = if partitions.iter().all(|p| p.tasks.is_empty()) {
             info!("No file scan tasks found in Iceberg metadata, creating fallback tasks");
-            create_fallback_partitions(self.num_workers).await.map_err(|e| DataFusionError::Execution(format!("Failed to create fallback partitions: {}", e)))?
+            create_fallback_partitions(self.num_workers)
+                .await
+                .map_err(|e| {
+                    DataFusionError::Execution(format!(
+                        "Failed to create fallback partitions: {}",
+                        e
+                    ))
+                })?
         } else {
             partitions
         };
@@ -411,8 +447,14 @@ async fn create_fallback_partitions(
         _ => {
             info!("ARROW_CACHE_FALLBACK_FILES not set; using built-in demo files");
             vec![
-                ("s3://ricardometadata/data/data_000.parquet".to_string(), default_rows),
-                ("s3://ricardometadata/data/data_001.parquet".to_string(), default_rows),
+                (
+                    "s3://ricardometadata/data/data_000.parquet".to_string(),
+                    default_rows,
+                ),
+                (
+                    "s3://ricardometadata/data/data_001.parquet".to_string(),
+                    default_rows,
+                ),
             ]
         }
     };
@@ -434,11 +476,21 @@ async fn create_fallback_partitions(
             deletes: vec![],
         };
         mock_tasks.push(mock_task);
-        info!("Created mock task for file: {} ({} estimated records)", file_path, estimated_records);
+        info!(
+            "Created mock task for file: {} ({} estimated records)",
+            file_path, estimated_records
+        );
     }
 
     // Now partition these mock tasks using the existing algorithm
-    let mut groups: Vec<TaskGroup> = vec![TaskGroup { tasks: Vec::new(), start_index: 0, end_index: 0 }; num_groups];
+    let mut groups: Vec<TaskGroup> = vec![
+        TaskGroup {
+            tasks: Vec::new(),
+            start_index: 0,
+            end_index: 0
+        };
+        num_groups
+    ];
     let mut group_sizes: Vec<usize> = vec![0; num_groups];
 
     mock_tasks.sort_by_key(|task| std::cmp::Reverse(task.record_count));
@@ -451,7 +503,9 @@ async fn create_fallback_partitions(
             .map(|(index, _)| index)
             .ok_or_else(|| "Failed to find minimum group")?;
 
-        let record_count = task.record_count.ok_or_else(|| "Task record count is None")? as usize;
+        let record_count = task
+            .record_count
+            .ok_or_else(|| "Task record count is None")? as usize;
 
         group_sizes[min_group_index] += record_count;
         groups[min_group_index].tasks.push(task);
@@ -463,8 +517,14 @@ async fn create_fallback_partitions(
         end += group_sizes[i];
         elem.start_index = start;
         elem.end_index = if end > 0 { end - 1 } else { 0 };
-        info!("Fallback group {}: {} tasks, rows {}-{} ({} total)",
-              i, elem.tasks.len(), elem.start_index, elem.end_index, group_sizes[i]);
+        info!(
+            "Fallback group {}: {} tasks, rows {}-{} ({} total)",
+            i,
+            elem.tasks.len(),
+            elem.start_index,
+            elem.end_index,
+            group_sizes[i]
+        );
     }
 
     Ok(Arc::new(groups))
@@ -472,14 +532,30 @@ async fn create_fallback_partitions(
 
 /// Creates a mock Iceberg schema for fallback file scan tasks.
 fn create_mock_iceberg_schema() -> Arc<iceberg::spec::Schema> {
-    use iceberg::spec::{PrimitiveType, Schema, NestedField, Type};
+    use iceberg::spec::{NestedField, PrimitiveType, Schema, Type};
 
     // Create fields that match the actual S3 data files
     let fields = vec![
-        Arc::new(NestedField::required(1, "id", Type::Primitive(PrimitiveType::Long))),
-        Arc::new(NestedField::required(2, "user_id", Type::Primitive(PrimitiveType::String))),
-        Arc::new(NestedField::required(3, "event_type", Type::Primitive(PrimitiveType::String))),
-        Arc::new(NestedField::required(4, "timestamp", Type::Primitive(PrimitiveType::Timestamptz))),
+        Arc::new(NestedField::required(
+            1,
+            "id",
+            Type::Primitive(PrimitiveType::Long),
+        )),
+        Arc::new(NestedField::required(
+            2,
+            "user_id",
+            Type::Primitive(PrimitiveType::String),
+        )),
+        Arc::new(NestedField::required(
+            3,
+            "event_type",
+            Type::Primitive(PrimitiveType::String),
+        )),
+        Arc::new(NestedField::required(
+            4,
+            "timestamp",
+            Type::Primitive(PrimitiveType::Timestamptz),
+        )),
     ];
 
     let schema = Schema::builder()
@@ -550,14 +626,18 @@ mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::prelude::SessionContext;
-    use iceberg::spec::{DataFileFormat};
+    use iceberg::spec::DataFileFormat;
 
     fn create_test_schema() -> SchemaRef {
         Arc::new(Schema::new(vec![
             Field::new("worker_ids", DataType::UInt64, false),
             Field::new("row_start_indexes", DataType::UInt64, false),
             Field::new("row_end_indexes", DataType::UInt64, false),
-            Field::new("file_paths", DataType::List(Arc::new(Field::new("item", DataType::Utf8View, true))), false),
+            Field::new(
+                "file_paths",
+                DataType::List(Arc::new(Field::new("item", DataType::Utf8View, true))),
+                false,
+            ),
         ]))
     }
 
@@ -659,16 +739,23 @@ mod tests {
 
         // Verify start and end indices for empty groups
         for (group_idx, group) in result.iter().enumerate() {
-            assert_eq!(group.start_index, 0,
+            assert_eq!(
+                group.start_index, 0,
                 "Empty group {} should have start_index 0, got {}",
-                group_idx, group.start_index);
+                group_idx, group.start_index
+            );
 
-            assert_eq!(group.end_index, 0,
+            assert_eq!(
+                group.end_index, 0,
                 "Empty group {} should have end_index 0, got {}",
-                group_idx, group.end_index);
+                group_idx, group.end_index
+            );
 
-            assert!(group.tasks.is_empty(),
-                "Empty group {} should have no tasks", group_idx);
+            assert!(
+                group.tasks.is_empty(),
+                "Empty group {} should have no tasks",
+                group_idx
+            );
         }
 
         Ok(())
@@ -729,16 +816,19 @@ mod tests {
         // Verify start and end indices are calculated correctly
         let mut expected_start = 0;
         for (group_idx, group) in two_result.iter().enumerate() {
-            assert_eq!(group.start_index, expected_start,
+            assert_eq!(
+                group.start_index, expected_start,
                 "Group {} start_index should be {}, got {}",
-                group_idx, expected_start, group.start_index);
+                group_idx, expected_start, group.start_index
+            );
 
             if group_records[group_idx] > 0 {
                 let expected_end = expected_start + group_records[group_idx] - 1;
                 assert_eq!(
                     group.end_index, expected_end,
                     "Group {} end_index should be {}, got {}",
-                    group_idx, expected_end, group.end_index);
+                    group_idx, expected_end, group.end_index
+                );
 
                 let range_size = group.end_index - group.start_index + 1;
                 assert_eq!(

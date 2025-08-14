@@ -1,6 +1,6 @@
+use super::config::config::DatasetConfig;
 use crate::worker::worker::DataLoader;
 use arrow::array::{ListArray, StringViewArray, UInt64Array};
-use arrow_cache::config::config::DatasetConfig;
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::error::FlightError;
@@ -19,8 +19,6 @@ use std::pin::Pin;
 use std::sync::Arc;
 use tonic::{Request, Response, Status, Streaming};
 use tracing::info;
-use crate::config::config::DatasetConfig;
-use crate::worker::worker::DataLoader;
 
 /// Worker node service implementing Apache Arrow Flight protocol for distributed caching.
 ///
@@ -289,12 +287,19 @@ impl FlightService for WorkerService {
 
         info!("start_index received in worker: {:?}", start_index);
 
-        let data_loader = DataLoader::new(self.metadata_loc.clone(),
-                                          self.table_name.clone(),
-                                          self.schema_name.clone(),
-                                          file_urls,
-                                          start_index).await.map_err(|e| Status::internal(format!("Failed to create data loader: {}", e)))?;
-        data_loader.load_data(&self.ctx.clone(), "memtable", start_index).await.map_err(|e| Status::internal(format!("Failed to load data: {}", e)))?;
+        let data_loader = DataLoader::new(
+            self.metadata_loc.clone(),
+            self.table_name.clone(),
+            self.schema_name.clone(),
+            file_urls,
+            start_index,
+        )
+        .await
+        .map_err(|e| Status::internal(format!("Failed to create data loader: {}", e)))?;
+        data_loader
+            .load_data(&self.ctx.clone(), "memtable", start_index)
+            .await
+            .map_err(|e| Status::internal(format!("Failed to load data: {}", e)))?;
         let df = self.ctx.sql(format!("select cache_index from memtable where cache_index >= {} and cache_index <= {}", start_index, start_index).as_str())
             .await.map_err(|e| Status::internal(format!("SQL error: {}", e)))?
             .collect()
@@ -331,7 +336,13 @@ impl FlightService for WorkerService {
 }
 
 impl WorkerService {
-    pub fn new(metadata_loc: String, table_name: String, schema_name: String, ctx: Arc<SessionContext>) -> Self {
+    #[allow(dead_code)]
+    pub fn new(
+        metadata_loc: String,
+        table_name: String,
+        schema_name: String,
+        ctx: Arc<SessionContext>,
+    ) -> Self {
         Self {
             metadata_loc,
             table_name,
@@ -341,9 +352,11 @@ impl WorkerService {
     }
 }
 
-pub async fn run(host: &String, port: &String) -> datafusion::common::Result<(), Box<dyn std::error::Error>> {
-    let config = SessionConfig::new()
-        .with_batch_size(1024);
+pub async fn run(
+    host: &String,
+    port: &String,
+) -> datafusion::common::Result<(), Box<dyn std::error::Error>> {
+    let config = SessionConfig::new().with_batch_size(1024);
     let ctx = Arc::new(SessionContext::new_with_config(config));
     let addr = format!("{host}:{port}").parse()?;
     let dataset_config =
