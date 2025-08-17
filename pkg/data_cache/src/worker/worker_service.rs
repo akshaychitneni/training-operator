@@ -1,6 +1,6 @@
+use super::config::config::DatasetConfig;
 use crate::worker::worker::DataLoader;
 use arrow::array::{ListArray, StringViewArray, UInt64Array};
-use arrow_cache::config::config::DatasetConfig;
 use arrow_flight::decode::FlightRecordBatchStream;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_flight::error::FlightError;
@@ -68,7 +68,7 @@ use tracing::info;
 ///
 /// - [`DataLoader`]: Loads assigned data files into memory tables
 /// - [`IndexPair`]: Represents row range queries in tickets
-pub(crate) struct WorkerService {
+pub struct WorkerService {
     metadata_loc: String,
     table_name: String,
     schema_name: String,
@@ -296,10 +296,10 @@ impl FlightService for WorkerService {
         )
         .await
         .map_err(|e| Status::internal(format!("Failed to create data loader: {}", e)))?;
-        let _ = data_loader
+        data_loader
             .load_data(&self.ctx.clone(), "memtable", start_index)
             .await
-            .map_err(|e| Status::internal(format!("failed to load dataset: {}", e)));
+            .map_err(|e| Status::internal(format!("Failed to load data: {}", e)))?;
         let df = self.ctx.sql(format!("select cache_index from memtable where cache_index >= {} and cache_index <= {}", start_index, start_index).as_str())
             .await.map_err(|e| Status::internal(format!("SQL error: {}", e)))?
             .collect()
@@ -332,6 +332,23 @@ impl FlightService for WorkerService {
         _request: Request<Empty>,
     ) -> Result<Response<Self::ListActionsStream>, Status> {
         todo!()
+    }
+}
+
+impl WorkerService {
+    #[allow(dead_code)]
+    pub fn new(
+        metadata_loc: String,
+        table_name: String,
+        schema_name: String,
+        ctx: Arc<SessionContext>,
+    ) -> Self {
+        Self {
+            metadata_loc,
+            table_name,
+            schema_name,
+            ctx,
+        }
     }
 }
 

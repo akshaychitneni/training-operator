@@ -22,6 +22,9 @@ artifacts
 __pycache__/
 *.egg-info/
 
+# Environment variables
+.env
+
 # Coverage
 cover.out
 

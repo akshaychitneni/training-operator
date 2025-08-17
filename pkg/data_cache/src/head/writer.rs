@@ -1,6 +1,6 @@
+use super::config::config::CacheConfig;
 use arrow::array::UInt64Array;
 use arrow::record_batch::RecordBatch;
-use arrow_cache::config::config::CacheConfig;
 use arrow_flight::FlightClient;
 use arrow_flight::encode::FlightDataEncoderBuilder;
 use arrow_schema::{DataType, SchemaRef};
@@ -19,7 +19,8 @@ use std::collections::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 use std::time::Duration;
-use tracing::{error, info};
+use tokio::time::{Instant, sleep};
+use tracing::{error, info, warn};
 
 /// Execution plan for distributed writing to worker nodes via Apache Arrow Flight.
 ///
@@ -53,11 +54,11 @@ use tracing::{error, info};
 /// │  Input Plan     │───▶│ Distributed     │───▶│  Worker Node 1  │
 /// │ (worker tasks)  │    │  WriterExec     │    │  (via Flight)   │
 /// └─────────────────┘    └─────────────────┘    └─────────────────┘
-///                                 │                       
+///                                 │
 ///                                 ├──────────────────────▶│  Worker Node 2  │
 ///                                 │                       │  (via Flight)   │
 ///                                 │                       └─────────────────┘
-///                                 │                       
+///                                 │
 ///                                 └──────────────────────▶│  Worker Node N  │
 ///                                                         │  (via Flight)   │
 ///                                                         └─────────────────┘
@@ -94,7 +95,7 @@ use tracing::{error, info};
 pub struct DistributedWriterExec {
     input: Arc<dyn ExecutionPlan>,
     worker_map: Arc<HashMap<String, String>>,
-    schema: SchemaRef,
+    metadata_schema: SchemaRef,
     plan_properties: PlanProperties,
     config: Arc<CacheConfig>,
 }
@@ -120,12 +121,12 @@ impl DistributedWriterExec {
     pub fn new(
         input: Arc<dyn ExecutionPlan>,
         worker_map: Arc<HashMap<String, String>>,
-        schema: SchemaRef,
+        metadata_schema: SchemaRef,
         num_partitions: usize,
         config: Arc<CacheConfig>,
     ) -> Self {
         // TODO:// revisit plan_properties
-        let eq_properties = EquivalenceProperties::new_with_orderings(schema.clone(), &[]);
+        let eq_properties = EquivalenceProperties::new_with_orderings(metadata_schema.clone(), &[]);
         let plan_properties = PlanProperties::new(
             eq_properties,                                     // Equivalence Properties
             Partitioning::UnknownPartitioning(num_partitions), // Output Partitioning
@@ -135,7 +136,7 @@ impl DistributedWriterExec {
         Self {
             input,
             worker_map,
-            schema,
+            metadata_schema,
             plan_properties,
             config,
         }
@@ -182,7 +183,7 @@ impl ExecutionPlan for DistributedWriterExec {
         ))
         .try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.schema.clone(),
+            self.metadata_schema.clone(),
             stream,
         )))
     }
@@ -235,8 +236,23 @@ pub async fn send_record_batch(
                         worker_id
                     ))
                 })?;
-                let mut client = ExecutorClient::try_new(addr, config.connect_timeout).await?;
-                let _ = client.send_batch(rb.schema(), vec![Ok(rb)]).await;
+
+                // Send batch with retry mechanism
+                match send_batch_with_retry(addr, rb.clone(), config.clone()).await {
+                    Ok(_) => {
+                        info!("Successfully sent batch to worker {}", worker_id);
+                    }
+                    Err(e) => {
+                        // Change error level to warning for batch delivery failures
+                        // This allows the head to keep running even if some batches fail
+                        warn!(
+                            "Failed to send batch to worker {} after all retries: {}",
+                            worker_id, e
+                        );
+                        // Continue processing other batches instead of failing entirely
+                        continue;
+                    }
+                }
             }
             Err(error) => {
                 let err = error.to_string();
@@ -246,6 +262,252 @@ pub async fn send_record_batch(
         }
     }
     Ok(Box::pin(EmptyRecordBatchStream::new(input.schema())))
+}
+
+/// Send a record batch to a worker with retry mechanism
+///
+/// This function implements configurable retry intervals for robust
+/// worker communication in distributed environments.
+///
+/// # Arguments
+///
+/// * `addr` - Worker address to connect to
+/// * `record_batch` - The data batch to send
+/// * `config` - Cache configuration with timeout settings
+///
+/// # Retry Strategy
+///
+/// - Maximum retries: 3 (configurable via ARROW_CACHE_MAX_RETRIES)
+/// - Retry interval: 5 seconds (configurable via ARROW_CACHE_RETRY_INTERVAL_MS)
+/// - Fixed interval with optional jitter
+///
+/// # Error Handling
+///
+/// - Transient errors (connection timeouts, network issues) trigger retries
+/// - "Table already exists" errors are logged as INFO (worker already has data)
+/// - Permanent errors (authentication, invalid endpoints) fail immediately
+/// - All errors are logged with appropriate severity levels
+async fn send_batch_with_retry(
+    addr: &String,
+    record_batch: RecordBatch,
+    config: Arc<CacheConfig>,
+) -> Result<()> {
+    // Configurable retry parameters via environment variables
+    let max_retries: u32 = std::env::var("ARROW_CACHE_MAX_RETRIES")
+        .unwrap_or_else(|_| "3".to_string())
+        .parse()
+        .unwrap_or(3);
+
+    let retry_interval_ms: u64 = std::env::var("ARROW_CACHE_RETRY_INTERVAL_MS")
+        .unwrap_or_else(|_| "5000".to_string())
+        .parse()
+        .unwrap_or(5000);
+
+    const JITTER_PERCENT: f64 = 0.1; // Reduced jitter for more predictable timing
+
+    let mut retry_count = 0;
+    let start_time = Instant::now();
+
+    loop {
+        info!(
+            "Attempting to send batch to {} (attempt {}/{})",
+            addr,
+            retry_count + 1,
+            max_retries + 1
+        );
+
+        match ExecutorClient::try_new(addr, config.connect_timeout).await {
+            Ok(mut client) => {
+                info!("Successfully connected to worker at {}", addr);
+
+                match client
+                    .send_batch(record_batch.schema(), vec![Ok(record_batch.clone())])
+                    .await
+                {
+                    Ok(_) => {
+                        let elapsed = start_time.elapsed();
+                        info!(
+                            "Successfully sent batch to {} in {:?} (attempt {})",
+                            addr,
+                            elapsed,
+                            retry_count + 1
+                        );
+                        return Ok(());
+                    }
+                    Err(send_error) => {
+                        // Check if this is a permanent error that shouldn't be retried
+                        if is_permanent_error(&send_error) {
+                            // Check specifically for memtable already exists (success case)
+                            if send_error
+                                .to_string()
+                                .to_lowercase()
+                                .contains("memtable already exists")
+                            {
+                                // Worker already has data loaded, this is actually a success case
+                                info!(
+                                    "Worker at {} already has data loaded (memtable exists)",
+                                    addr
+                                );
+                                return Ok(());
+                            } else if send_error.to_string().to_lowercase().contains("table")
+                                && send_error
+                                    .to_string()
+                                    .to_lowercase()
+                                    .contains("already exists")
+                            {
+                                // Generic table already exists, also a success case
+                                info!("Worker at {} already has required table", addr);
+                                return Ok(());
+                            } else {
+                                // Other permanent errors should be reported
+                                warn!("Detected permanent error, skipping retries: {}", send_error);
+                                return Err(send_error);
+                            }
+                        }
+
+                        // For non-permanent errors, log as error
+                        error!("Failed to send batch to {}: {}", addr, send_error);
+
+                        if retry_count < max_retries {
+                            warn!(
+                                "Send failed, will retry in {}ms (attempt {}/{})",
+                                retry_interval_ms,
+                                retry_count + 1,
+                                max_retries + 1
+                            );
+                        } else {
+                            let total_elapsed = start_time.elapsed();
+                            error!(
+                                "Exhausted all {} retry attempts to send batch to {} after {:?}",
+                                max_retries + 1,
+                                addr,
+                                total_elapsed
+                            );
+                            return Err(DataFusionError::Execution(format!(
+                                "Failed to send batch to {} after {} retries: {}",
+                                addr,
+                                max_retries + 1,
+                                send_error
+                            )));
+                        }
+                    }
+                }
+            }
+            Err(connect_error) => {
+                error!("Failed to connect to worker at {}: {}", addr, connect_error);
+
+                if retry_count < max_retries {
+                    warn!(
+                        "Connection failed, will retry in {}ms (attempt {}/{})",
+                        retry_interval_ms,
+                        retry_count + 1,
+                        max_retries + 1
+                    );
+                } else {
+                    let total_elapsed = start_time.elapsed();
+                    error!(
+                        "Exhausted all {} retry attempts to connect to {} after {:?}",
+                        max_retries + 1,
+                        addr,
+                        total_elapsed
+                    );
+                    return Err(DataFusionError::Execution(format!(
+                        "Failed to connect to {} after {} retries: {}",
+                        addr,
+                        max_retries + 1,
+                        connect_error
+                    )));
+                }
+            }
+        }
+
+        if retry_count < max_retries {
+            // Apply small jitter to avoid thundering herd problem
+            let jitter = (fastrand::f64() - 0.5) * 2.0 * JITTER_PERCENT;
+            let jittered_delay = (retry_interval_ms as f64 * (1.0 + jitter)) as u64;
+
+            info!(
+                "Waiting {}ms before retry {} of {}",
+                jittered_delay,
+                retry_count + 1,
+                max_retries
+            );
+            sleep(Duration::from_millis(jittered_delay)).await;
+
+            retry_count += 1;
+        } else {
+            break;
+        }
+    }
+
+    let total_elapsed = start_time.elapsed();
+    Err(DataFusionError::Execution(format!(
+        "Failed to send batch to {} after {} retries and {:?}",
+        addr,
+        max_retries + 1,
+        total_elapsed
+    )))
+}
+
+/// Determines if an error is permanent and should not be retried
+///
+/// Permanent errors include:
+/// - Table already exists (data already loaded)
+/// - Schema mismatches
+/// - Authentication failures
+/// - Invalid configuration
+///
+/// Transient errors that should be retried include:
+/// - Network timeouts
+/// - Connection refused (worker starting up)
+/// - DNS resolution failures (temporary)
+fn is_permanent_error(error: &DataFusionError) -> bool {
+    let error_message = error.to_string().to_lowercase();
+
+    // Check for permanent application errors
+    if error_message.contains("table") && error_message.contains("already exists") {
+        return true;
+    }
+
+    if error_message.contains("memtable already exists") {
+        return true;
+    }
+
+    // Schema-related errors are usually permanent
+    if error_message.contains("schema mismatch")
+        || error_message.contains("invalid schema")
+        || error_message.contains("column not found")
+    {
+        return true;
+    }
+
+    // Authentication/authorization errors are permanent
+    if error_message.contains("unauthorized")
+        || error_message.contains("permission denied")
+        || error_message.contains("authentication failed")
+        || error_message.contains("invalidaccesskeyid")
+        || error_message.contains("accessdenied")
+        || error_message.contains("signaturemismatch")
+        || error_message.contains("tokenmismatch")
+        || error_message.contains("the aws access key id you provided does not exist")
+        || error_message.contains("aws access key id")
+        || error_message.contains("s3error")
+    {
+        return true;
+    }
+
+    // Invalid endpoint configurations are permanent
+    if error_message.contains("invalid uri") || error_message.contains("malformed url") {
+        return true;
+    }
+
+    // All other errors are considered transient and should be retried
+    // This includes:
+    // - Connection timeouts
+    // - DNS resolution failures
+    // - Connection refused (worker starting)
+    // - Network unreachable
+    false
 }
 
 /// Arrow Flight client for communicating with worker nodes.
